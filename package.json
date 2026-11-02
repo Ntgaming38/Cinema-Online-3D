@@ -1,12 +1,18 @@
 {
   "name": "tcg-cinema",
   "private": true,
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "concurrently -n WEB,REALTIME -c cyan,magenta \"npm run dev:web\" \"npm run dev:realtime\"",
     "dev:web": "npm --workspace apps/web run dev",
     "dev:realtime": "npm --workspace apps/realtime run dev",
     "build": "npm --workspace apps/web run build && npm --workspace apps/realtime run build",
+    "test": "tsx tests/unit.test.ts && tsx tests/integration.test.ts",
+    "test:unit": "tsx tests/unit.test.ts",
+    "test:integration": "tsx tests/integration.test.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:studio": "prisma studio"
@@ -14,6 +20,7 @@
   "devDependencies": {
     "concurrently": "^9.1.2",
     "prisma": "^6.19.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.8.3"
   }
 }
