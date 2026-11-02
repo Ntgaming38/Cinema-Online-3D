@@ -33,7 +33,16 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ user: null });
     }
 
+    const token = signAuthToken({
+      userId: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      avatarUrl: user.avatarUrl,
+      isGuest: !user.username
+    });
+
     return NextResponse.json({
+      token,
       user: {
         ...user,
         isGuest: !user.username

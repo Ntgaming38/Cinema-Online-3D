@@ -2,7 +2,7 @@
 
 import React, { useRef, useState, useMemo } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
-import { OrbitControls, Text } from "@react-three/drei";
+import { OrbitControls, RoundedBox, Text } from "@react-three/drei";
 import * as THREE from "three";
 
 export interface SeatOccupant {
@@ -20,35 +20,50 @@ export interface TheaterSceneProps {
   onSelectSeat?: (seatLabel: string) => void;
 }
 
-// Stylized Voxel Viewer Character sitting in a seat
 function VoxelViewer({ shirtColor, hairColor = "#1e1b29" }: { shirtColor: string; hairColor?: string }) {
   return (
     <group position={[0, 0.45, 0]}>
-      {/* Torso / Shirt */}
-      <mesh position={[0, 0.35, 0]}>
-        <boxGeometry args={[0.42, 0.44, 0.28]} />
+      <RoundedBox position={[0, 0.35, 0]} args={[0.42, 0.44, 0.3]} radius={0.08} smoothness={3}>
         <meshStandardMaterial color={shirtColor} roughness={0.7} />
-      </mesh>
-      {/* Head */}
+      </RoundedBox>
+      <RoundedBox position={[-0.11, 0.08, 0.34]} args={[0.14, 0.17, 0.66]} radius={0.06} smoothness={3}>
+        <meshStandardMaterial color="#252638" roughness={0.85} />
+      </RoundedBox>
+      <RoundedBox position={[0.11, 0.08, 0.34]} args={[0.14, 0.17, 0.66]} radius={0.06} smoothness={3}>
+        <meshStandardMaterial color="#252638" roughness={0.85} />
+      </RoundedBox>
+      <RoundedBox position={[-0.11, 0.08, 0.69]} args={[0.15, 0.13, 0.25]} radius={0.05} smoothness={3}>
+        <meshStandardMaterial color="#11111a" roughness={0.75} />
+      </RoundedBox>
+      <RoundedBox position={[0.11, 0.08, 0.69]} args={[0.15, 0.13, 0.25]} radius={0.05} smoothness={3}>
+        <meshStandardMaterial color="#11111a" roughness={0.75} />
+      </RoundedBox>
       <mesh position={[0, 0.72, 0.02]}>
-        <boxGeometry args={[0.3, 0.3, 0.3]} />
+        <sphereGeometry args={[0.17, 20, 16]} />
         <meshStandardMaterial color="#fcd34d" roughness={0.8} />
       </mesh>
-      {/* Hair */}
-      <mesh position={[0, 0.84, 0.02]}>
-        <boxGeometry args={[0.32, 0.12, 0.32]} />
+      <mesh position={[0, 0.84, 0.025]}>
+        <sphereGeometry args={[0.17, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2]} />
         <meshStandardMaterial color={hairColor} roughness={0.9} />
       </mesh>
-      {/* Left Arm on armrest */}
-      <mesh position={[-0.26, 0.32, 0.08]}>
-        <boxGeometry args={[0.1, 0.32, 0.14]} />
-        <meshStandardMaterial color={shirtColor} roughness={0.7} />
+      <mesh position={[-0.065, 0.73, -0.125]}>
+        <sphereGeometry args={[0.025, 8, 8]} />
+        <meshStandardMaterial color="#211a21" roughness={0.5} />
       </mesh>
-      {/* Right Arm on armrest */}
-      <mesh position={[0.26, 0.32, 0.08]}>
-        <boxGeometry args={[0.1, 0.32, 0.14]} />
-        <meshStandardMaterial color={shirtColor} roughness={0.7} />
+      <mesh position={[0.065, 0.73, -0.125]}>
+        <sphereGeometry args={[0.025, 8, 8]} />
+        <meshStandardMaterial color="#211a21" roughness={0.5} />
       </mesh>
+      <mesh position={[0, 0.68, -0.155]}>
+        <sphereGeometry args={[0.025, 8, 8]} />
+        <meshStandardMaterial color="#e7a12d" roughness={0.7} />
+      </mesh>
+      <RoundedBox position={[-0.25, 0.31, 0.03]} args={[0.1, 0.18, 0.25]} radius={0.045} smoothness={3}>
+        <meshStandardMaterial color={shirtColor} roughness={0.7} />
+      </RoundedBox>
+      <RoundedBox position={[0.25, 0.31, 0.03]} args={[0.1, 0.18, 0.25]} radius={0.045} smoothness={3}>
+        <meshStandardMaterial color={shirtColor} roughness={0.7} />
+      </RoundedBox>
     </group>
   );
 }
@@ -138,29 +153,39 @@ function CinemaSeat({ x, y, z, label, isMySeat, occupant, dummyViewerColor, onSe
       }}
       onPointerOut={() => setHovered(false)}
     >
-      {/* Seat Base Cushion */}
-      <mesh position={[0, 0.28, 0]}>
-        <boxGeometry args={[0.68, 0.24, 0.58]} />
-        <meshStandardMaterial color={cushionColor} roughness={0.65} />
+      <mesh position={[0, 0.1, 0.04]}>
+        <cylinderGeometry args={[0.075, 0.1, 0.2, 10]} />
+        <meshStandardMaterial color="#27232a" metalness={0.65} roughness={0.35} />
       </mesh>
+      <mesh position={[0, 0.035, 0.04]}>
+        <cylinderGeometry args={[0.22, 0.22, 0.05, 12]} />
+        <meshStandardMaterial color="#27232a" metalness={0.6} roughness={0.4} />
+      </mesh>
+      <RoundedBox position={[0, 0.28, 0]} args={[0.68, 0.24, 0.58]} radius={0.09} smoothness={4}>
+        <meshStandardMaterial color={cushionColor} roughness={0.65} />
+      </RoundedBox>
 
       {/* Seat Backrest */}
-      <mesh position={[0, 0.68, -0.22]}>
-        <boxGeometry args={[0.68, 0.65, 0.14]} />
+      <RoundedBox position={[0, 0.68, -0.22]} rotation={[-0.08, 0, 0]} args={[0.68, 0.68, 0.16]} radius={0.1} smoothness={4}>
         <meshStandardMaterial color={backrestColor} roughness={0.65} />
-      </mesh>
+      </RoundedBox>
 
       {/* Left Armrest */}
-      <mesh position={[-0.38, 0.36, 0]}>
-        <boxGeometry args={[0.09, 0.42, 0.58]} />
-        <meshStandardMaterial color={armrestColor} roughness={0.4} />
+      <mesh position={[-0.38, 0.18, 0]}>
+        <cylinderGeometry args={[0.025, 0.035, 0.27, 8]} />
+        <meshStandardMaterial color={armrestColor} metalness={0.45} roughness={0.35} />
       </mesh>
-
       {/* Right Armrest */}
-      <mesh position={[0.38, 0.36, 0]}>
-        <boxGeometry args={[0.09, 0.42, 0.58]} />
-        <meshStandardMaterial color={armrestColor} roughness={0.4} />
+      <mesh position={[0.38, 0.18, 0]}>
+        <cylinderGeometry args={[0.025, 0.035, 0.27, 8]} />
+        <meshStandardMaterial color={armrestColor} metalness={0.45} roughness={0.35} />
       </mesh>
+      <RoundedBox position={[-0.38, 0.36, 0.02]} args={[0.12, 0.12, 0.58]} radius={0.055} smoothness={4}>
+        <meshStandardMaterial color={armrestColor} metalness={0.25} roughness={0.38} />
+      </RoundedBox>
+      <RoundedBox position={[0.38, 0.36, 0.02]} args={[0.12, 0.12, 0.58]} radius={0.055} smoothness={4}>
+        <meshStandardMaterial color={armrestColor} metalness={0.25} roughness={0.38} />
+      </RoundedBox>
 
       {/* Seat Number Tag */}
       <Text
@@ -233,23 +258,22 @@ export function TheaterScene({
     "#3b82f6", "#eab308", "#10b981", "#6366f1"
   ];
 
-  const rowLabels = ["A", "B", "C", "D", "E"];
-  const seatsPerRow = 8; // 4 left, aisle, 4 right
+  const rowLabels = ["A", "B", "C", "D", "E", "F"];
+  const seatsPerRow = 16;
 
   const seats = useMemo(() => {
     const list: React.ReactNode[] = [];
     let colorIdx = 0;
 
     for (let row = 0; row < rowLabels.length; row++) {
-      const stepY = row * 0.22;
-      const stepZ = -1.2 + row * 1.15;
+      const stepY = row * 0.16;
+      const stepZ = -1.2 + row * 0.92;
 
       for (let col = 0; col < seatsPerRow; col++) {
         // Divide into left block and right block with a center illuminated aisle
-        const isLeft = col < 4;
-        const sideOffset = isLeft ? -0.55 : 0.55;
-        const colPos = isLeft ? (col - 3.5) * 0.95 : (col - 3.5) * 0.95;
-        const x = colPos + sideOffset;
+        const isLeft = col < seatsPerRow / 2;
+        const seatInBlock = col % (seatsPerRow / 2);
+        const x = isLeft ? -6.2 + seatInBlock * 0.78 : 0.74 + seatInBlock * 0.78;
         const label = `${rowLabels[row]}${col + 1}`;
 
         const isMySeat = selectedSeat === label;
@@ -279,7 +303,7 @@ export function TheaterScene({
 
   return (
     <Canvas
-      camera={{ position: [0, 4.2, 5.8], fov: 42 }}
+      camera={{ position: [0, 5, 8], fov: 46 }}
       dpr={[1, 1.5]}
       gl={{ antialias: true, alpha: false }}
     >
@@ -300,26 +324,33 @@ export function TheaterScene({
       {/* Presenter on Stage Hologram Ring */}
       <StagePresenter />
 
-      {/* Tiered Auditorium Floor */}
-      <mesh position={[0, 0.45, 1.2]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[14, 8]} />
-        <meshStandardMaterial color="#0b0816" roughness={0.9} />
-      </mesh>
+      {/* Stepped auditorium tiers and illuminated center aisle */}
+      {rowLabels.map((_, row) => {
+        const rowY = row * 0.16;
+        const rowZ = -1.2 + row * 0.92;
+        const aisleZ = rowZ + 0.46;
 
-      {/* Illuminated Neon Purple Center Aisle */}
-      <mesh position={[0, 0.46, 1.2]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[0.9, 7.8]} />
-        <meshBasicMaterial color="#7c3aed" />
-      </mesh>
-      {/* Side Neon Edge Lines for the aisle */}
-      <mesh position={[-0.45, 0.47, 1.2]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[0.04, 7.8]} />
-        <meshBasicMaterial color="#c084fc" />
-      </mesh>
-      <mesh position={[0.45, 0.47, 1.2]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[0.04, 7.8]} />
-        <meshBasicMaterial color="#c084fc" />
-      </mesh>
+        return (
+          <group key={`tier-${row}`}>
+            <mesh position={[0, rowY - 0.1, aisleZ]}>
+              <boxGeometry args={[14, 0.2, 0.92]} />
+              <meshStandardMaterial color="#0b0816" roughness={0.9} />
+            </mesh>
+            <mesh position={[0, rowY + 0.012, aisleZ]}>
+              <boxGeometry args={[0.82, 0.024, 0.9]} />
+              <meshBasicMaterial color="#7c3aed" />
+            </mesh>
+            <mesh position={[-0.43, rowY + 0.02, aisleZ]}>
+              <boxGeometry args={[0.035, 0.03, 0.9]} />
+              <meshBasicMaterial color="#c084fc" />
+            </mesh>
+            <mesh position={[0.43, rowY + 0.02, aisleZ]}>
+              <boxGeometry args={[0.035, 0.03, 0.9]} />
+              <meshBasicMaterial color="#c084fc" />
+            </mesh>
+          </group>
+        );
+      })}
 
       {/* Cinema Screen Frame Backing */}
       <mesh position={[0, 3.6, -5.2]}>
@@ -376,6 +407,9 @@ export function TheaterScene({
         maxDistance={9.5}
         maxPolarAngle={1.42}
         minPolarAngle={0.55}
+        minAzimuthAngle={-Math.PI / 2}
+        maxAzimuthAngle={Math.PI / 2}
+        target={[0, -0.5, 0]}
       />
     </Canvas>
   );

@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { CinemaVideoPlayer, CinemaVideoPlayerRef } from "@/components/video/CinemaVideoPlayer";
 import { TheaterScene, SeatOccupant } from "@/components/theater/TheaterScene";
+import { parseVideoUrl } from "@/lib/video-parser";
 
 interface ChatItem {
   id: string;
@@ -69,6 +70,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   // User State
   const [currentUser, setCurrentUser] = useState<{ id: string; displayName: string; avatarUrl?: string; isGuest?: boolean } | null>(null);
   const [authToken, setAuthToken] = useState<string>("");
+  const [sessionReady, setSessionReady] = useState(false);
 
   // Room State
   const [roomDetails, setRoomDetails] = useState<any>(null);
@@ -79,7 +81,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
   // Connection & Playback State
   const [connected, setConnected] = useState(false);
-  const [onlineCount, setOnlineCount] = useState(86);
+  const [onlineCount, setOnlineCount] = useState(0);
   const [membersList, setMembersList] = useState<RoomMemberItem[]>([]);
   const [userRole, setUserRole] = useState<"OWNER" | "MODERATOR" | "MEMBER">("MEMBER");
   const [allowMemberControl, setAllowMemberControl] = useState(false);
@@ -90,26 +92,21 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
   // Chat & Reactions
   const [chatTab, setChatTab] = useState<"chat" | "members">("chat");
-  const [chat, setChat] = useState<ChatItem[]>([
-    { id: "1", userId: "geng", user: "Gen.G_VN", avatarUrl: "https://api.dicebear.com/7.x/bottts/svg?seed=GenG", message: "Phim hay quá 🔥", createdAt: "20:01" },
-    { id: "2", userId: "raptor", user: "Raptor", avatarUrl: "https://api.dicebear.com/7.x/bottts/svg?seed=Raptor", message: "Cùng xem thôi nào! 🎬", createdAt: "20:02" },
-    { id: "3", userId: "animefan", user: "AnimeFan", avatarUrl: "https://api.dicebear.com/7.x/bottts/svg?seed=AnimeFan", message: "Uta xinh quá 😄", createdAt: "20:03" },
-    { id: "4", userId: "d3f4ult", user: "D3f4ult", avatarUrl: "https://api.dicebear.com/7.x/bottts/svg?seed=D3f4ult", message: "One Piece mãi đỉnh 💪", createdAt: "20:03" },
-    { id: "5", userId: "nguyenthuy", user: "NguyenThuy", avatarUrl: "https://api.dicebear.com/7.x/bottts/svg?seed=NguyenThuy", message: "Cho mình chỗ ngồi với nhé ❤️", createdAt: "20:04" }
-  ]);
+  const [chat, setChat] = useState<ChatItem[]>([]);
   const [message, setMessage] = useState("");
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
   const [sceneReactions, setSceneReactions] = useState<Array<{ id: string; emoji: string; userName: string; timestamp: number }>>([]);
-  const [likeCount, setLikeCount] = useState(12500);
+  const [likeCount, setLikeCount] = useState(0);
 
   // UI States
-  const [mySeat, setMySeat] = useState<string | undefined>("C5");
+  const [mySeat, setMySeat] = useState<string | undefined>();
   const [showChatPanel, setShowChatPanel] = useState(true);
   const [showRoomInfo, setShowRoomInfo] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showChangeVideoModal, setShowChangeVideoModal] = useState(false);
   const [newVideoInput, setNewVideoInput] = useState("");
   const [newTitleInput, setNewTitleInput] = useState("");
+  const [isChangingVideo, setIsChangingVideo] = useState(false);
   const [appAlert, setAppAlert] = useState<string | null>(null);
 
   // 1. Initial Authentication & Load Room Details
@@ -126,6 +123,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
         if (meData.user) {
           user = meData.user;
+          token = meData.token || "";
         } else {
           const guestRes = await fetch("/api/auth/guest", { method: "POST" });
           const guestData = await guestRes.json();
@@ -137,7 +135,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
         if (!active) return;
         setCurrentUser(user);
-        if (token) setAuthToken(token);
+        setAuthToken(token);
 
         // Fetch room info from TiDB Cloud
         const roomRes = await fetch(`/api/rooms/${roomCode}`);
@@ -171,11 +169,14 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
         // Fetch initial chat from TiDB Cloud
         const chatRes = await fetch(`/api/rooms/${roomCode}/chat`);
         const chatData = await chatRes.json();
-        if (active && chatData.messages && chatData.messages.length > 0) {
-          setChat(chatData.messages);
-        }
+        if (active && Array.isArray(chatData.messages)) setChat(chatData.messages);
+        if (active) setSessionReady(true);
       } catch (err) {
         console.error("Init room error:", err);
+        if (active) {
+          setAppAlert("Không thể khởi tạo phiên phòng chiếu.");
+          setSessionReady(true);
+        }
       }
     }
 
@@ -187,7 +188,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
   // 2. Connect to Socket.IO once room is verified
   useEffect(() => {
-    if (passwordRequired || roomNotFound) return;
+    if (!sessionReady || passwordRequired || roomNotFound) return;
 
     const endpoint = process.env.NEXT_PUBLIC_REALTIME_URL || "http://localhost:4001";
     const socket = io(endpoint, {
@@ -212,7 +213,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
     });
 
     socket.on("room:presence", (data: { count: number; members: RoomMemberItem[] }) => {
-      if (data.count) setOnlineCount(data.count);
+      setOnlineCount(data.count ?? 0);
       setMembersList(data.members || []);
 
       if (currentUser) {
@@ -294,9 +295,12 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [roomCode, passwordRequired, roomNotFound, authToken, currentUser]);
+  }, [roomCode, passwordRequired, roomNotFound, sessionReady, authToken, currentUser]);
 
   const canControl = userRole === "OWNER" || userRole === "MODERATOR" || allowMemberControl;
+  const parsedVideo = parseVideoUrl(sourceUrl);
+  const moviePoster = roomDetails?.video?.posterUrl ||
+    (parsedVideo.youtubeId ? `https://img.youtube.com/vi/${parsedVideo.youtubeId}/hqdefault.jpg` : "https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=240&auto=format&fit=crop");
 
   const handlePlaybackCommand = (action: "play" | "pause" | "seek", positionSec?: number) => {
     if (!canControl) return;
@@ -309,18 +313,37 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
   const handleChangeVideo = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canControl || !newVideoInput.trim()) return;
+    if (!canControl || !newVideoInput.trim() || isChangingVideo) return;
 
-    socketRef.current?.emit("playback:command", {
+    const parsedVideo = parseVideoUrl(newVideoInput.trim());
+    if (!parsedVideo.embeddable) {
+      setAppAlert(parsedVideo.errorMessage || "Link video không hợp lệ.");
+      return;
+    }
+
+    const socket = socketRef.current;
+    if (!socket?.connected) {
+      setAppAlert("Kết nối phòng bị gián đoạn. Vui lòng thử lại.");
+      return;
+    }
+
+    setIsChangingVideo(true);
+    socket.timeout(10000).emit("playback:command", {
       roomCode,
       action: "changeVideo",
-      sourceUrl: newVideoInput.trim(),
+      sourceUrl: parsedVideo.cleanUrl,
       videoTitle: newTitleInput.trim() || undefined
-    });
+    }, (timeoutError: Error | null, result?: { success: boolean; error?: string }) => {
+      setIsChangingVideo(false);
+      if (timeoutError || !result?.success) {
+        setAppAlert(result?.error || "Không thể đổi video. Vui lòng thử lại.");
+        return;
+      }
 
-    setShowChangeVideoModal(false);
-    setNewVideoInput("");
-    setNewTitleInput("");
+      setShowChangeVideoModal(false);
+      setNewVideoInput("");
+      setNewTitleInput("");
+    });
   };
 
   const handleSendChat = (e: React.FormEvent) => {
@@ -348,7 +371,6 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
       roomCode,
       seatLabel
     });
-    setMySeat(seatLabel);
   };
 
   const handleVerifyPassword = async (e: React.FormEvent) => {
@@ -443,7 +465,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   }
 
   return (
-    <div className="cinema-app-shell" style={{ width: "100vw", height: "100vh", background: "#080612", color: "#fff", overflow: "hidden", display: "flex", flexDirection: "column", fontFamily: "'Be Vietnam Pro', system-ui, sans-serif" }}>
+    <div className="cinema-app-shell room-app-shell">
       {/* Floating Reactions Overlay */}
       <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 9999, overflow: "hidden" }}>
         {floatingReactions.map((rx) => (
@@ -471,10 +493,10 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
       )}
 
       {/* 1. TOP NAVIGATION BAR */}
-      <header style={{ height: "64px", padding: "0 20px", display: "flex", alignItems: "center", justifyContent: "space-between", borderBottom: "1px solid rgba(139, 92, 246, 0.15)", background: "rgba(10, 7, 20, 0.8)", backdropFilter: "blur(12px)", flexShrink: 0, zIndex: 50 }}>
+      <header className="room-topbar">
         {/* Logo */}
-        <Link href="/" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <div style={{ width: "38px", height: "38px", borderRadius: "12px", background: "linear-gradient(135deg, #a855f7, #6d28d9)", display: "grid", placeItems: "center", boxShadow: "0 0 20px rgba(168, 85, 247, 0.5)" }}>
+        <Link href="/" className="room-brand">
+          <div className="room-brand-mark">
             <Play size={18} fill="#fff" color="#fff" />
           </div>
           <div>
@@ -484,33 +506,33 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
         </Link>
 
         {/* Center Nav Pills */}
-        <nav style={{ display: "flex", alignItems: "center", gap: "8px" }} className="hidden-mobile">
-          <Link href={`/rooms/${roomCode}`} style={{ display: "inline-flex", alignItems: "center", gap: "7px", background: "linear-gradient(135deg, #7c3aed, #5b21b6)", color: "#fff", padding: "7px 16px", borderRadius: "20px", fontSize: "12px", fontWeight: 700, boxShadow: "0 2px 10px rgba(124, 58, 237, 0.4)" }}>
+        <nav className="room-top-nav hidden-mobile">
+          <Link href={`/rooms/${roomCode}`} className="room-top-nav-active">
             <Clapperboard size={14} /> Rạp chiếu
           </Link>
-          <a href="#movies" style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: "#c4b5fd", padding: "7px 14px", borderRadius: "20px", fontSize: "12px" }}>
+          <a href="#movies">
             <Film size={14} /> Phim
           </a>
-          <a href="#community" style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: "#c4b5fd", padding: "7px 14px", borderRadius: "20px", fontSize: "12px" }}>
+          <a href="#community">
             <Users size={14} /> Cộng đồng
           </a>
-          <a href="#achievements" style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: "#c4b5fd", padding: "7px 14px", borderRadius: "20px", fontSize: "12px" }}>
+          <a href="#achievements">
             <Trophy size={14} /> Thành tích
           </a>
         </nav>
 
         {/* Right Search, Notification & User Avatar */}
-        <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
-          <div style={{ position: "relative", display: "flex", alignItems: "center" }} className="hidden-mobile">
+        <div className="room-top-actions">
+          <div className="room-search hidden-mobile">
             <Search size={14} style={{ position: "absolute", left: "10px", color: "#8b5cf6" }} />
             <input
               type="text"
               placeholder="Tìm phim... (Ctrl + K)"
-              style={{ background: "rgba(22, 17, 38, 0.7)", border: "1px solid rgba(139, 92, 246, 0.25)", borderRadius: "20px", padding: "6px 14px 6px 30px", fontSize: "11px", color: "#fff", outline: "none", width: "170px" }}
+              className="room-search-input"
             />
           </div>
 
-          <div style={{ position: "relative", cursor: "pointer" }}>
+          <div className="room-notifications">
             <Bell size={18} color="#c4b5fd" />
             <span style={{ position: "absolute", top: "-4px", right: "-4px", width: "14px", height: "14px", background: "#ef4444", borderRadius: "50%", color: "#fff", fontSize: "9px", fontWeight: 800, display: "grid", placeItems: "center" }}>
               3
@@ -518,12 +540,12 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
           </div>
 
           {/* User Profile Avatar with Online Dot */}
-          <div style={{ position: "relative", display: "flex", alignItems: "center", cursor: "pointer" }}>
-            <div style={{ width: "34px", height: "34px", borderRadius: "50%", border: "2px solid #a855f7", overflow: "hidden", background: "#381c5a", display: "grid", placeItems: "center" }}>
+          <div className="room-profile">
+            <div className="room-profile-avatar">
               <img
                 src={currentUser?.avatarUrl || "https://api.dicebear.com/7.x/bottts/svg?seed=Luffy"}
                 alt="Avatar"
-                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                className="room-profile-image"
               />
             </div>
             <span style={{ position: "absolute", bottom: "-1px", right: "-1px", width: "9px", height: "9px", background: "#22c55e", borderRadius: "50%", border: "2px solid #080612" }} />
@@ -532,9 +554,9 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
       </header>
 
       {/* 2. BODY LAYOUT: LEFT SIDEBAR + CENTER THEATER + RIGHT CHAT */}
-      <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
+      <div className="room-layout">
         {/* LEFT FLOATING SIDEBAR */}
-        <aside style={{ width: "180px", flexShrink: 0, background: "rgba(13, 10, 24, 0.85)", borderRight: "1px solid rgba(139, 92, 246, 0.15)", padding: "16px 12px", display: "flex", flexDirection: "column", justifyContent: "space-between", zIndex: 40 }} className="hidden-mobile">
+        <aside className="room-sidebar hidden-mobile">
           <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
             <Link href="/" style={{ display: "flex", alignItems: "center", gap: "10px", padding: "9px 12px", borderRadius: "10px", color: "#c4b5fd", fontSize: "12px", fontWeight: 500 }}>
               <Home size={16} /> Trang chủ
@@ -583,23 +605,23 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
         </aside>
 
         {/* CENTER: THEATER AUDITORIUM VIEWPORT */}
-        <main style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, position: "relative", overflow: "hidden" }}>
+        <main className="room-main">
           {/* Top Movie Info Bar */}
-          <div style={{ padding: "10px 18px", background: "rgba(13, 10, 24, 0.7)", borderBottom: "1px solid rgba(139, 92, 246, 0.15)", display: "flex", alignItems: "center", justifyContent: "space-between", flexShrink: 0, zIndex: 30 }}>
+          <div className="room-movie-bar">
             <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
-              <div style={{ width: "48px", height: "48px", borderRadius: "10px", overflow: "hidden", border: "1px solid #7c3aed", flexShrink: 0 }}>
+              <div className="room-movie-poster">
                 <img
-                  src="https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=120&auto=format&fit=crop"
+                  src={moviePoster}
                   alt="Poster"
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  className="room-movie-poster-image"
                 />
               </div>
 
-              <div>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <h1 style={{ margin: 0, fontSize: "16px", fontWeight: 800, color: "#fff" }}>{videoTitle}</h1>
+              <div className="room-movie-copy">
+                <div className="room-movie-heading">
+                  <h1>{videoTitle}</h1>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginTop: "4px", fontSize: "10px", color: "#c4b5fd" }}>
+                <div className="room-movie-meta">
                   <span style={{ background: "#2e1c4a", padding: "2px 6px", borderRadius: "4px" }}>🎬 Phim chiếu rạp</span>
                   <span style={{ background: "#2e1c4a", padding: "2px 6px", borderRadius: "4px" }}>⏱ 119 phút</span>
                   <span style={{ background: "#2e1c4a", padding: "2px 6px", borderRadius: "4px", color: "#38bdf8" }}>HD</span>
@@ -609,14 +631,14 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
               </div>
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "6px", background: "rgba(35, 23, 61, 0.8)", border: "1px solid rgba(139, 92, 246, 0.3)", borderRadius: "20px", padding: "6px 14px", fontSize: "12px", color: "#d8b4fe" }}>
+            <div className="room-movie-actions">
+              <div className="room-viewer-pill">
                 <Users size={14} /> <b>{onlineCount}</b> người đang xem
               </div>
               <button
                 type="button"
                 onClick={() => router.push("/")}
-                style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: "linear-gradient(135deg, #dc2626, #991b1b)", color: "#fff", border: "none", borderRadius: "20px", padding: "7px 16px", fontSize: "12px", fontWeight: 700, cursor: "pointer", boxShadow: "0 2px 10px rgba(220, 38, 38, 0.4)" }}
+                className="room-leave-button"
               >
                 <LogOut size={13} /> Rời rạp
               </button>
@@ -624,10 +646,10 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
           </div>
 
           {/* STAGE & AUDITORIUM VIEWPORT */}
-          <div style={{ flex: 1, position: "relative", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div className="room-stage">
             {/* Floating Room Info Card (Upper Left) */}
             {showRoomInfo && (
-              <div style={{ position: "absolute", top: "16px", left: "16px", zIndex: 25, background: "rgba(17, 13, 30, 0.88)", backdropFilter: "blur(10px)", border: "1px solid rgba(139, 92, 246, 0.3)", borderRadius: "14px", padding: "12px 16px", width: "190px", boxShadow: "0 8px 30px rgba(0,0,0,0.6)" }}>
+              <div className="room-info-card">
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px", borderBottom: "1px solid rgba(139, 92, 246, 0.2)", paddingBottom: "6px" }}>
                   <span style={{ fontSize: "11px", fontWeight: 700, color: "#c084fc", display: "flex", alignItems: "center", gap: "5px" }}>
                     ℹ️ Thông tin rạp
@@ -652,13 +674,13 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
             )}
 
             {/* THE CINEMA SCREEN (Centered at Top) */}
-            <div style={{ width: "100%", height: "56%", position: "relative", background: "#05040a", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", zIndex: 10 }}>
+            <div className="room-screen-stage">
               {/* Stage Curtains Left & Right framing the video screen */}
               <div style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: "65px", background: "linear-gradient(90deg, #1f0b33, #3b0764 60%, rgba(59, 7, 100, 0))", zIndex: 12, pointerEvents: "none" }} />
               <div style={{ position: "absolute", top: 0, bottom: 0, right: 0, width: "65px", background: "linear-gradient(-90deg, #1f0b33, #3b0764 60%, rgba(59, 7, 100, 0))", zIndex: 12, pointerEvents: "none" }} />
 
               {/* Video Player Embedded as the Cinema Screen */}
-              <div style={{ width: "84%", height: "96%", position: "relative", borderRadius: "8px", overflow: "hidden", boxShadow: "0 0 50px rgba(139, 92, 246, 0.4), 0 20px 60px #000", border: "3px solid #2d184a" }}>
+              <div className="room-screen-frame">
                 <CinemaVideoPlayer
                   ref={playerRef}
                   sourceUrl={sourceUrl}
@@ -672,7 +694,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
             </div>
 
             {/* THE 3D AUDITORIUM (Tiered Seats + Audience + Purple Center Aisle + Hologram Stage) */}
-            <div style={{ width: "100%", height: "44%", position: "relative", background: "#080612", zIndex: 15 }}>
+            <div className="room-auditorium">
               <TheaterScene
                 currentUserId={currentUser?.id}
                 selectedSeat={mySeat}
@@ -683,7 +705,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
               />
 
               {/* Floating Bottom Action Capsule */}
-              <div style={{ position: "absolute", bottom: "12px", left: "50%", transform: "translateX(-50%)", zIndex: 30, display: "flex", alignItems: "center", gap: "8px", background: "rgba(20, 15, 34, 0.88)", backdropFilter: "blur(12px)", border: "1px solid rgba(139, 92, 246, 0.35)", borderRadius: "30px", padding: "6px 14px", boxShadow: "0 8px 32px rgba(0,0,0,0.7)" }}>
+              <div className="room-action-bar">
                 <button
                   type="button"
                   onClick={() => setShowChatPanel(!showChatPanel)}
@@ -724,7 +746,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
               </div>
 
               {/* Bottom Right Room Stat Card */}
-              <div style={{ position: "absolute", bottom: "12px", right: "16px", zIndex: 25, background: "rgba(20, 15, 34, 0.85)", backdropFilter: "blur(10px)", border: "1px solid rgba(139, 92, 246, 0.25)", borderRadius: "12px", padding: "8px 14px", display: "flex", flexDirection: "column", gap: "4px" }} className="hidden-mobile">
+              <div className="room-stat-card hidden-mobile">
                 <span style={{ fontSize: "10px", color: "#a78bfa", fontWeight: 700 }}>📊 Thống kê phòng</span>
                 <div style={{ display: "flex", alignItems: "center", gap: "12px", fontSize: "11px" }}>
                   <span style={{ display: "flex", alignItems: "center", gap: "4px", color: "#f472b6" }}>
@@ -741,7 +763,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
         {/* 3. RIGHT SIDEBAR: CHAT & MEMBER TABS */}
         {showChatPanel && (
-          <aside style={{ width: "300px", flexShrink: 0, background: "rgba(13, 10, 24, 0.92)", borderLeft: "1px solid rgba(139, 92, 246, 0.15)", display: "flex", flexDirection: "column", zIndex: 40 }}>
+          <aside className="room-chat-panel">
             {/* Chat Tabs */}
             <div style={{ display: "flex", alignItems: "center", borderBottom: "1px solid rgba(139, 92, 246, 0.2)", padding: "10px 14px", gap: "8px" }}>
               <button
@@ -766,7 +788,9 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                 ref={chatScrollRef}
                 style={{ flex: 1, overflowY: "auto", padding: "14px", display: "flex", flexDirection: "column", gap: "12px" }}
               >
-                {chat.map((item) => (
+                {chat.length === 0 ? (
+                  <div className="room-chat-empty">Chưa có tin nhắn. Hãy bắt đầu cuộc trò chuyện.</div>
+                ) : chat.map((item) => (
                   <div key={item.id} style={{ display: "flex", gap: "10px", alignItems: "flex-start" }}>
                     <div style={{ width: "32px", height: "32px", borderRadius: "50%", overflow: "hidden", border: "1px solid #7c3aed", flexShrink: 0, background: "#2e1a47" }}>
                       <img
@@ -881,9 +905,10 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                 </button>
                 <button
                   type="submit"
-                  style={{ background: "linear-gradient(135deg, #8b5cf6, #7c3aed)", color: "#fff", border: "none", padding: "8px 18px", borderRadius: "8px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}
+                  disabled={isChangingVideo}
+                  style={{ background: "linear-gradient(135deg, #8b5cf6, #7c3aed)", color: "#fff", border: "none", padding: "8px 18px", borderRadius: "8px", fontSize: "12px", fontWeight: 600, cursor: isChangingVideo ? "wait" : "pointer", opacity: isChangingVideo ? 0.7 : 1 }}
                 >
-                  Chiếu Video Này
+                  {isChangingVideo ? "Đang cập nhật..." : "Chiếu Video Này"}
                 </button>
               </div>
             </form>

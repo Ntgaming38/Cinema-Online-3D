@@ -295,8 +295,9 @@ io.on("connection", (socket: Socket) => {
 
   socket.on("chat:send", async (payload: { roomCode?: string; message?: string }) => {
     const meta = socketMeta.get(socket.id);
-    const code = cleanCode(payload?.roomCode) || meta?.roomCode;
-    if (!code) return;
+    const code = meta?.roomCode;
+    const payloadCode = payload?.roomCode === undefined ? code : cleanCode(payload.roomCode);
+    if (!code || payloadCode !== code) return socket.emit("app:error", { message: "Bạn chưa tham gia phòng này." });
 
     // Rate limiting: 5 messages per 5s
     if (!checkRateLimit(chatRateLimits, user.userId, 5, 5000)) {
@@ -340,10 +341,21 @@ io.on("connection", (socket: Socket) => {
     positionSec?: number;
     sourceUrl?: string;
     videoTitle?: string;
-  }) => {
+  }, acknowledge?: (result: { success: boolean; error?: string }) => void) => {
+    const respond = (success: boolean, error?: string) => {
+      if (acknowledge) {
+        acknowledge({ success, ...(error ? { error } : {}) });
+      } else if (error) {
+        socket.emit("app:error", { message: error });
+      }
+    };
     const meta = socketMeta.get(socket.id);
-    const code = cleanCode(payload?.roomCode) || meta?.roomCode;
-    if (!code) return;
+    const code = meta?.roomCode;
+    const payloadCode = payload?.roomCode === undefined ? code : cleanCode(payload.roomCode);
+    if (!code || payloadCode !== code) {
+      respond(false, "Bạn chưa tham gia phòng này.");
+      return;
+    }
 
     try {
       // Permission check: Room Owner or Moderator or room.allowMemberControl
@@ -354,14 +366,23 @@ io.on("connection", (socket: Socket) => {
         select: { id: true, ownerId: true, allowMemberControl: true }
       });
 
-      if (!room) return;
+      if (!room) {
+        respond(false, "Phòng chiếu không tồn tại.");
+        return;
+      }
 
       const isOwner = room.ownerId === user.userId;
       const isMod = userRecord?.role === "MODERATOR";
       const canControl = isOwner || isMod || room.allowMemberControl;
 
       if (!canControl) {
-        return socket.emit("app:error", { message: "Chỉ Chủ phòng hoặc Quản trị viên mới có quyền điều khiển video." });
+        respond(false, "Chỉ Chủ phòng hoặc Quản trị viên mới có quyền điều khiển video.");
+        return;
+      }
+
+      if (!["play", "pause", "seek", "changeVideo"].includes(payload.action || "")) {
+        respond(false, "Lệnh phát video không hợp lệ.");
+        return;
       }
 
       const prev = roomPlaybacks.get(code) || {
@@ -391,26 +412,29 @@ io.on("connection", (socket: Socket) => {
           newPosition = Math.max(0, payload.positionSec!);
         }
       } else if (payload.action === "changeVideo") {
-        if (payload.sourceUrl) {
-          newSourceUrl = payload.sourceUrl.trim();
-          newVideoTitle = payload.videoTitle?.trim() || "Video rạp chiếu";
-          newPosition = 0;
-          newIsPlaying = true;
-
-          // Update video in TiDB
-          await prisma.video.upsert({
-            where: { roomId: room.id },
-            create: {
-              roomId: room.id,
-              sourceUrl: newSourceUrl,
-              title: newVideoTitle
-            },
-            update: {
-              sourceUrl: newSourceUrl,
-              title: newVideoTitle
-            }
-          });
+        if (typeof payload.sourceUrl !== "string" || !payload.sourceUrl.trim()) {
+          respond(false, "Vui lòng nhập link video.");
+          return;
         }
+        newSourceUrl = payload.sourceUrl.trim();
+        let parsedUrl: URL;
+        try {
+          parsedUrl = new URL(newSourceUrl);
+        } catch {
+          respond(false, "Link video không hợp lệ.");
+          return;
+        }
+        if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+          respond(false, "Link video phải sử dụng HTTP hoặc HTTPS.");
+          return;
+        }
+        if (newSourceUrl.length > 2000) {
+          respond(false, "Link video vượt quá giới hạn cho phép.");
+          return;
+        }
+        newVideoTitle = payload.videoTitle?.trim() || "Video rạp chiếu";
+        newPosition = 0;
+        newIsPlaying = true;
       }
 
       const updatedState: PlaybackMemory = {
@@ -422,16 +446,7 @@ io.on("connection", (socket: Socket) => {
         updatedAt: Date.now()
       };
 
-      roomPlaybacks.set(code, updatedState);
-
-      // Broadcast to all sockets in the room
-      io.to(code).emit("playback:state", {
-        ...updatedState,
-        allowMemberControl: room.allowMemberControl
-      });
-
-      // Persist to TiDB
-      await prisma.playbackState.upsert({
+      const playbackWrite = prisma.playbackState.upsert({
         where: { roomId: room.id },
         create: {
           roomId: room.id,
@@ -447,15 +462,44 @@ io.on("connection", (socket: Socket) => {
           videoTitle: updatedState.videoTitle
         }
       });
+
+      if (payload.action === "changeVideo") {
+        await prisma.$transaction([
+          prisma.video.upsert({
+            where: { roomId: room.id },
+            create: {
+              roomId: room.id,
+              sourceUrl: updatedState.sourceUrl!,
+              title: updatedState.videoTitle || "Video rạp chiếu"
+            },
+            update: {
+              sourceUrl: updatedState.sourceUrl!,
+              title: updatedState.videoTitle || "Video rạp chiếu"
+            }
+          }),
+          playbackWrite
+        ]);
+      } else {
+        await playbackWrite;
+      }
+
+      roomPlaybacks.set(code, updatedState);
+      io.to(code).emit("playback:state", {
+        ...updatedState,
+        allowMemberControl: room.allowMemberControl
+      });
+      respond(true);
     } catch (err) {
       console.error("playback:command error:", err);
+      respond(false, "Không thể lưu thay đổi video. Vui lòng thử lại.");
     }
   });
 
   socket.on("reaction:send", async (payload: { roomCode?: string; emoji?: string }) => {
     const meta = socketMeta.get(socket.id);
-    const code = cleanCode(payload?.roomCode) || meta?.roomCode;
-    if (!code) return;
+    const code = meta?.roomCode;
+    const payloadCode = payload?.roomCode === undefined ? code : cleanCode(payload.roomCode);
+    if (!code || payloadCode !== code) return socket.emit("app:error", { message: "Bạn chưa tham gia phòng này." });
 
     // Rate limiting: 3 reactions per second
     if (!checkRateLimit(reactionRateLimits, user.userId, 3, 1000)) {
@@ -491,10 +535,16 @@ io.on("connection", (socket: Socket) => {
 
   socket.on("seat:select", async (payload: { roomCode?: string; seatLabel?: string }) => {
     const meta = socketMeta.get(socket.id);
-    const code = cleanCode(payload?.roomCode) || meta?.roomCode;
-    if (!code || !payload.seatLabel) return;
+    const code = meta?.roomCode;
+    const payloadCode = payload?.roomCode === undefined ? code : cleanCode(payload.roomCode);
+    if (!code || payloadCode !== code || !payload.seatLabel) {
+      return socket.emit("app:error", { message: "Bạn chưa tham gia phòng này." });
+    }
 
     const label = payload.seatLabel.trim().toUpperCase();
+    if (!/^[A-F](?:[1-9]|1[0-6])$/.test(label)) {
+      return socket.emit("app:error", { message: "Vị trí ghế không hợp lệ." });
+    }
     const usersMap = roomUsers.get(code);
     if (!usersMap) return;
 
