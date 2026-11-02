@@ -1,0 +1,124 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoomVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum RoomRole {
+  OWNER
+  MODERATOR
+  MEMBER
+}
+
+enum RoomStatus {
+  WAITING
+  PLAYING
+  PAUSED
+  ENDED
+}
+
+model User {
+  id          String       @id @default(cuid())
+  displayName String       @db.VarChar(40)
+  avatarUrl   String?      @db.VarChar(500)
+  createdAt   DateTime     @default(now())
+  roomsOwned  Room[]       @relation("RoomOwner")
+  memberships RoomMember[]
+  messages    ChatMessage[]
+}
+
+model Room {
+  id           String         @id @default(cuid())
+  code         String         @unique @db.VarChar(12)
+  name         String         @db.VarChar(100)
+  description  String?        @db.VarChar(500)
+  visibility   RoomVisibility @default(PUBLIC)
+  passwordHash String?        @db.VarChar(255)
+  maxMembers   Int            @default(100)
+  status       RoomStatus     @default(WAITING)
+  ownerId      String
+  owner        User           @relation("RoomOwner", fields: [ownerId], references: [id])
+  video        Video?
+  members      RoomMember[]
+  playback     PlaybackState?
+  messages     ChatMessage[]
+  reactions    Reaction[]
+  seats        Seat[]
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  @@index([visibility, status, createdAt])
+}
+
+model Video {
+  id          String   @id @default(cuid())
+  roomId      String   @unique
+  room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  title       String   @db.VarChar(200)
+  sourceUrl   String   @db.VarChar(2000)
+  posterUrl   String?  @db.VarChar(1000)
+  durationSec Int?
+  createdAt   DateTime @default(now())
+}
+
+model RoomMember {
+  id        String   @id @default(cuid())
+  roomId    String
+  userId    String
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      RoomRole @default(MEMBER)
+  seatId    String?
+  joinedAt  DateTime @default(now())
+  leftAt    DateTime?
+  @@unique([roomId, userId])
+  @@index([roomId, leftAt])
+}
+
+model PlaybackState {
+  id             String   @id @default(cuid())
+  roomId         String   @unique
+  room           Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  isPlaying      Boolean  @default(false)
+  positionSec    Float    @default(0)
+  playbackRate   Float    @default(1)
+  updatedAt      DateTime @updatedAt
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  roomId    String
+  userId    String
+  content   String   @db.VarChar(1000)
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  @@index([roomId, createdAt])
+}
+
+model Reaction {
+  id        String   @id @default(cuid())
+  roomId    String
+  userId    String
+  emoji     String   @db.VarChar(16)
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  @@index([roomId, createdAt])
+}
+
+model Seat {
+  id       String @id @default(cuid())
+  roomId   String
+  label    String @db.VarChar(12)
+  x        Float
+  z        Float
+  room     Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  @@unique([roomId, label])
+}
