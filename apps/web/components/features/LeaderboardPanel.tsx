@@ -7,9 +7,10 @@ interface LeaderboardPanelProps {
   leaderboardTab: "level" | "support";
   setLeaderboardTab: React.Dispatch<React.SetStateAction<"level" | "support">>;
   socket: any;
+  onClose?: () => void;
 }
 
-export function LeaderboardPanel({ leaderboard, leaderboardTab, setLeaderboardTab, socket }: LeaderboardPanelProps) {
+export function LeaderboardPanel({ leaderboard, leaderboardTab, setLeaderboardTab, socket, onClose }: LeaderboardPanelProps) {
   return (
     <div style={{
       position: "fixed", bottom: "80px", right: "20px", width: "300px",
@@ -18,7 +19,7 @@ export function LeaderboardPanel({ leaderboard, leaderboardTab, setLeaderboardTa
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
         <b style={{ fontSize: "15px", color: "#fff" }}>🏆 Bảng xếp hạng</b>
-        <button onClick={() => {}} style={{ background: "transparent", border: "none", color: "#9ca3af", cursor: "pointer" }}>✕</button>
+        <button onClick={onClose} style={{ background: "transparent", border: "none", color: "#9ca3af", cursor: "pointer" }}>✕</button>
       </div>
       <div style={{ display: "flex", gap: "6px", marginBottom: "10px" }}>
         <button

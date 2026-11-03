@@ -19,6 +19,12 @@ export async function GET(request: NextRequest) {
         username: true,
         displayName: true,
         avatarUrl: true,
+        exp: true,
+        balance: true,
+        totalDonated: true,
+        shirtColor: true,
+        hairStyle: true,
+        accessory: true,
         createdAt: true,
         _count: {
           select: {

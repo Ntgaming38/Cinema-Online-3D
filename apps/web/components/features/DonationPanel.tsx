@@ -8,9 +8,10 @@ interface DonationPanelProps {
   setDonationInput: React.Dispatch<React.SetStateAction<string>>;
   handleDonation: () => void;
   currentUser: { balance?: number; totalDonated?: number } | null;
+  onClose?: () => void;
 }
 
-export function DonationPanel({ donations, donationInput, setDonationInput, handleDonation, currentUser }: DonationPanelProps) {
+export function DonationPanel({ donations, donationInput, setDonationInput, handleDonation, currentUser, onClose }: DonationPanelProps) {
   return (
     <div style={{
       position: "fixed", bottom: "80px", right: "20px", width: "280px",
@@ -19,7 +20,7 @@ export function DonationPanel({ donations, donationInput, setDonationInput, hand
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
         <b style={{ fontSize: "14px", color: "#fff" }}>❤️ ủng hộ</b>
-        <button onClick={() => {}} style={{ background: "transparent", border: "none", color: "#9ca3af", cursor: "pointer" }}>✕</button>
+        <button onClick={onClose} style={{ background: "transparent", border: "none", color: "#9ca3af", cursor: "pointer" }}>✕</button>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "10px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>

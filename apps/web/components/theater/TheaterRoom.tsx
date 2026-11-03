@@ -53,6 +53,7 @@ interface RoomMemberItem {
   avatarUrl?: string;
   role: "OWNER" | "MODERATOR" | "MEMBER";
   seatLabel?: string;
+  appearance?: { shirtColor?: string; hairStyle?: string; accessory?: string };
 }
 
 interface FloatingReaction {
@@ -119,6 +120,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   const [roomTheme, setRoomTheme] = useState("main");
   const [userAppearance, setUserAppearance] = useState<{ shirtColor?: string; hairStyle?: string; accessory?: string }>({});
 
+  const [appNotice, setAppNotice] = useState<string | null>(null);
   const [showChangeVideoModal, setShowChangeVideoModal] = useState(false);
   const [newVideoInput, setNewVideoInput] = useState("");
   const [newTitleInput, setNewTitleInput] = useState("");
@@ -306,12 +308,85 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
       }
     });
 
+    // ==================== FEATURE EVENT WIRING ====================
+    socket.on("app:notice", (data: { message: string }) => {
+      setAppNotice(data.message);
+      setTimeout(() => setAppNotice(null), 4500);
+    });
+
+    socket.on("room:password-required", () => {
+      setPasswordRequired(true);
+    });
+
+    socket.on("missions:state", (data: { missions: any[] }) => {
+      setMissions(data.missions || []);
+    });
+
+    socket.on("mission:claimed", () => {
+      // Server follows with a fresh missions:state; refresh profile numbers too.
+      fetch("/api/auth/me").then(r => r.json()).then(d => {
+        if (d.user) setCurrentUser(prev => (prev ? { ...prev, ...d.user } : d.user));
+      }).catch(() => {});
+    });
+
+    socket.on("leaderboard:update", (data: { tab: "level" | "support"; list: any[] }) => {
+      setLeaderboard(data.list || []);
+      setLeaderboardTab(data.tab);
+    });
+
+    socket.on("video:queue:update", (data: { queue: any[] }) => {
+      setVideoQueue(data.queue || []);
+    });
+
+    socket.on("vote:skip:update", (data: { votes: number; total: number; ratio: number }) => {
+      setSkipVote({ votes: data.votes, total: data.total, ratio: data.ratio });
+    });
+
+    socket.on("vote:skip:result", () => {
+      setAppNotice("Đã đủ 35% phiếu — đang chuyển sang video tiếp theo trong hàng chờ!");
+      setTimeout(() => setAppNotice(null), 4500);
+    });
+
+    socket.on("donation:received", (data: { amount: number; message?: string; userId: string; displayName: string; balance?: number; totalDonated?: number }) => {
+      setDonations(prev => [...prev.slice(-30), {
+        amount: data.amount,
+        message: data.message,
+        userId: data.userId,
+        displayName: data.displayName,
+        createdAt: new Date().toISOString()
+      }]);
+      setCurrentUser(prev => (prev && prev.id === data.userId
+        ? { ...prev, balance: data.balance ?? prev.balance, totalDonated: data.totalDonated ?? prev.totalDonated }
+        : prev));
+    });
+
+    socket.on("room:theme:changed", (data: { theme: string }) => {
+      setRoomTheme(data.theme);
+    });
+
+    socket.on("image:projected", (data: { url: string; setByName: string }) => {
+      setProjectedImage({ url: data.url, setByName: data.setByName });
+    });
+
+    socket.on("image:unprojected", () => {
+      setProjectedImage(null);
+    });
+
     return () => {
       socket.emit("room:leave", { roomCode });
       socket.disconnect();
       socketRef.current = null;
     };
   }, [roomCode, passwordRequired, roomNotFound, sessionReady, authToken, currentUser]);
+
+  // Watch-time heartbeat: 1 ping per minute feeds the "Ngồi xem cùng nhau" mission.
+  useEffect(() => {
+    if (!connected) return;
+    const timer = setInterval(() => {
+      socketRef.current?.emit("heartbeat:watch");
+    }, 60000);
+    return () => clearInterval(timer);
+  }, [connected]);
 
   const canControl = userRole === "OWNER" || userRole === "MODERATOR" || allowMemberControl;
   const parsedVideo = parseVideoUrl(sourceUrl);
@@ -426,7 +501,8 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
       occupiedSeatsMap[m.seatLabel] = {
         userId: m.userId,
         displayName: m.displayName,
-        avatarUrl: m.avatarUrl
+        avatarUrl: m.avatarUrl,
+        appearance: m.appearance
       };
     }
   }
@@ -505,6 +581,13 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
       {appAlert && (
         <div style={{ position: "fixed", top: "20px", left: "50%", transform: "translateX(-50%)", background: "#ef4444", color: "#fff", padding: "10px 22px", borderRadius: "10px", fontSize: "13px", fontWeight: 600, zIndex: 10000, boxShadow: "0 8px 30px rgba(0,0,0,0.6)" }}>
           {appAlert}
+        </div>
+      )}
+
+      {/* Success/Info Notice Toast */}
+      {appNotice && (
+        <div style={{ position: "fixed", top: "20px", left: "50%", transform: "translateX(-50%)", background: "#059669", color: "#fff", padding: "10px 22px", borderRadius: "10px", fontSize: "13px", fontWeight: 600, zIndex: 10000, boxShadow: "0 8px 30px rgba(0,0,0,0.6)" }}>
+          {appNotice}
         </div>
       )}
 
@@ -689,14 +772,23 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
               </div>
             )}
 
-            {/* THE CINEMA SCREEN (Centered at Top) */}
-            <div className="room-screen-stage">
-              {/* Stage Curtains Left & Right framing the video screen */}
-              <div style={{ position: "absolute", top: 0, bottom: 0, left: 0, width: "65px", background: "linear-gradient(90deg, #1f0b33, #3b0764 60%, rgba(59, 7, 100, 0))", zIndex: 12, pointerEvents: "none" }} />
-              <div style={{ position: "absolute", top: 0, bottom: 0, right: 0, width: "65px", background: "linear-gradient(-90deg, #1f0b33, #3b0764 60%, rgba(59, 7, 100, 0))", zIndex: 12, pointerEvents: "none" }} />
 
-              {/* Video Player Embedded as the Cinema Screen */}
-              <div className="room-screen-frame">
+            {/* UNIFIED STAGE FRAME — screen, stage, presenter, seats and audience
+                all live in ONE 3D frame, exactly like the reference mockup
+                (no more split "screen frame" / "auditorium frame"). */}
+            <div className="room-stage-frame">
+              <TheaterScene
+                currentUserId={currentUser?.id}
+                selectedSeat={mySeat}
+                occupiedSeats={occupiedSeatsMap}
+                isPlaying={isPlaying}
+                theme={roomTheme}
+                recentReactions={sceneReactions}
+                onSelectSeat={handleSelectSeat}
+              />
+
+              {/* Video player overlaid exactly onto the 3D cinema screen */}
+              <div className="room-screen-overlay">
                 <CinemaVideoPlayer
                   ref={playerRef}
                   sourceUrl={sourceUrl}
@@ -706,19 +798,13 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                   onCommand={handlePlaybackCommand}
                   onTitleDetected={(t) => setVideoTitle(t)}
                 />
+                {projectedImage && (
+                  <div style={{ position: "absolute", inset: 0, zIndex: 30, background: "rgba(0,0,0,.9)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <img src={projectedImage.url} alt="Ảnh chiếu lên màn hình" style={{ maxWidth: "96%", maxHeight: "96%", objectFit: "contain", borderRadius: "6px" }} />
+                    <button type="button" onClick={() => socketRef.current?.emit("image:unproject")} style={{ position: "absolute", top: "8px", right: "8px", background: "rgba(255,255,255,.92)", color: "#111", border: "none", borderRadius: "999px", padding: "5px 11px", fontWeight: 800, fontSize: "11px", cursor: "pointer" }}>✕ Tắt ảnh</button>
+                  </div>
+                )}
               </div>
-            </div>
-
-            {/* THE 3D AUDITORIUM (Tiered Seats + Audience + Purple Center Aisle + Hologram Stage) */}
-            <div className="room-auditorium">
-              <TheaterScene
-                currentUserId={currentUser?.id}
-                selectedSeat={mySeat}
-                occupiedSeats={occupiedSeatsMap}
-                isPlaying={isPlaying}
-                recentReactions={sceneReactions}
-                onSelectSeat={handleSelectSeat}
-              />
 
               {/* Floating Bottom Action Capsule */}
               <div className="room-action-bar">
@@ -746,10 +832,11 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
                 <button
                   type="button"
-                  onClick={() => setAppAlert("Tính năng bình chọn sẽ mở theo phiên chiếu!")}
+                  onClick={() => socketRef.current?.emit("vote:skip")}
+                  title="Bình chọn bỏ qua video hiện tại — đủ 35% sẽ chuyển video đã duyệt tiếp theo"
                   style={{ display: "inline-flex", alignItems: "center", gap: "5px", background: "transparent", color: "#c4b5fd", border: "none", padding: "6px 10px", fontSize: "11px", cursor: "pointer" }}
                 >
-                  <BarChart2 size={13} /> Bình chọn
+                  <BarChart2 size={13} /> Bình chọn bỏ qua{skipVote.total > 0 ? ` · ${Math.round(skipVote.ratio * 100)}%` : ""}
                 </button>
 
                 <button
@@ -934,6 +1021,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
       {connected && socketRef.current && (
       <FeaturePanels
         socket={socketRef.current}
+        canModerate={canControl}
         userId={currentUser?.id || ""}
         displayName={currentUser?.displayName || "Người dùng"}
         avatarUrl={currentUser?.avatarUrl}

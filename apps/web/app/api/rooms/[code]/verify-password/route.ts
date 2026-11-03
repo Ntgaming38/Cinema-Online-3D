@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { comparePassword } from "@/lib/auth";
+import { comparePassword, getCurrentUserFromRequest } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -19,7 +19,7 @@ export async function POST(
 
     const room = await prisma.room.findUnique({
       where: { code: cleanCode },
-      select: { id: true, passwordHash: true, visibility: true }
+      select: { id: true, passwordHash: true, visibility: true, ownerId: true }
     });
 
     if (!room) {
@@ -28,6 +28,12 @@ export async function POST(
 
     if (room.visibility === "PUBLIC" || !room.passwordHash) {
       return NextResponse.json({ success: true, verified: true });
+    }
+
+    // Membership can only be granted to a signed-in (or guest) account.
+    const session = await getCurrentUserFromRequest(request);
+    if (!session) {
+      return NextResponse.json({ error: "Bạn chưa đăng nhập." }, { status: 401 });
     }
 
     const body = await request.json();
@@ -39,6 +45,16 @@ export async function POST(
     const match = await comparePassword(parsed.data.password, room.passwordHash);
     if (!match) {
       return NextResponse.json({ error: "Mật khẩu phòng không chính xác." }, { status: 401 });
+    }
+
+    // Correct password: record membership so room detail, chat history and the
+    // realtime join check all recognize this user from now on.
+    if (session.userId !== room.ownerId) {
+      await prisma.roomMember.upsert({
+        where: { roomId_userId: { roomId: room.id, userId: session.userId } },
+        create: { roomId: room.id, userId: session.userId, role: "MEMBER", joinedAt: new Date(), leftAt: null },
+        update: { leftAt: null }
+      });
     }
 
     return NextResponse.json({ success: true, verified: true });

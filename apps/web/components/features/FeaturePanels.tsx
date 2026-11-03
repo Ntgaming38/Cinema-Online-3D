@@ -25,13 +25,14 @@ const MISSIONS: Array<{ key: string; label: string; exp: number; target: number 
   { key: "daily_checkin", label: "Chào buổi sáng", exp: 5, target: 1 },
   { key: "chat_5", label: "Trò chuyện sôi nổi", exp: 10, target: 5 },
   { key: "video_approved", label: "Gửi video hay", exp: 15, target: 1 },
-  { key: "watch_30min", label: "Ngồi xem cùng nhau", exp: 10, target: 1 },
+  { key: "watch_30min", label: "Ngồi xem cùng nhau (phút)", exp: 10, target: 30 },
   { key: "support", label: "Ủng hộ rạp", exp: 20, target: 1 },
   { key: "invite", label: "Chia sẻ rạp", exp: 15, target: 1 },
 ];
 
 interface FeaturePanelsProps {
   socket: any;
+  canModerate?: boolean;
   userId: string;
   displayName: string;
   avatarUrl?: string;
@@ -67,7 +68,7 @@ interface FeaturePanelsProps {
 
 export function FeaturePanels(props: FeaturePanelsProps) {
   const {
-    socket, userId, displayName, avatarUrl, roomCode,
+    socket, canModerate, userId, displayName, avatarUrl, roomCode,
     currentTheme, onThemeChange, currentUser,
     missions, setMissions, leaderboard, setLeaderboard,
     leaderboardTab, setLeaderboardTab,
@@ -107,8 +108,9 @@ export function FeaturePanels(props: FeaturePanelsProps) {
   const handleCopyInvite = () => {
     navigator.clipboard.writeText(`${window.location.origin}/rooms/${roomCode}`);
     setCopyTooltip(true); setTimeout(() => setCopyTooltip(false), 2000);
-    socket.emit("mission:claim", { missionKey: "invite" });
+    socket.emit("mission:invite");
   };
+  const handleCheckin = () => socket.emit("checkin:daily");
 
   useEffect(() => { socket.emit("leaderboard:get", { tab: leaderboardTab }); }, [socket, leaderboardTab]);
 
@@ -168,7 +170,9 @@ export function FeaturePanels(props: FeaturePanelsProps) {
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "#9ca3af", marginTop: "4px" }}>
                     <span>{found ? found.progress : 0}/{m.target}</span>
-                    {canClaim ? (
+                    {m.key === "daily_checkin" && !found?.completed ? (
+                      <button onClick={handleCheckin} style={{ background: "#a855f7", border: "none", color: "#fff", borderRadius: "4px", padding: "2px 8px", fontSize: "11px", cursor: "pointer" }}>Điểm danh</button>
+                    ) : canClaim ? (
                       <button onClick={() => handleClaim(m.key)} style={{ background: "#a855f7", border: "none", color: "#fff", borderRadius: "4px", padding: "2px 8px", fontSize: "11px", cursor: "pointer" }}>Nhận thưởng</button>
                     ) : found?.claimed ? (
                       <span style={{ color: "#4ade80" }}>Đã nhận</span>
@@ -183,14 +187,14 @@ export function FeaturePanels(props: FeaturePanelsProps) {
         </div>
       )}
       {/* LEADERBOARD */}
-      {featureTab === "leaderboard" && leaderboard.length > 0 && (
-        <LeaderboardPanel leaderboard={leaderboard} leaderboardTab={leaderboardTab} setLeaderboardTab={setLeaderboardTab} socket={socket} />
+      {featureTab === "leaderboard" && (
+        <LeaderboardPanel leaderboard={leaderboard} leaderboardTab={leaderboardTab} setLeaderboardTab={setLeaderboardTab} socket={socket} onClose={() => setFeatureTab(null)} />
       )}
-      {featureTab === "queue" && <VideoQueuePanel videoQueue={videoQueue} queueForm={queueForm} setQueueForm={setQueueForm} handleQueueSubmit={handleQueueSubmit} />}
-      {featureTab === "donation" && <DonationPanel donations={donations} donationInput={donationInput} setDonationInput={setDonationInput} handleDonation={handleDonation} currentUser={currentUser} />}
-      {featureTab === "image" && <ImageProjectionPanel projectedImage={projectedImage} imageUrl={imageUrl} setImageUrl={setImageUrl} handleProjectImage={handleProjectImage} handleUnproject={() => socket.emit("image:unproject")} />}
-      {featureTab === "character" && <CharacterPanel userAppearance={userAppearance} setUserAppearance={setUserAppearance} handleCharacter={handleCharacter} />}
-      {featureTab === "theme" && <ThemeTogglePanel currentTheme={currentTheme} handleTheme={handleTheme} />}
+      {featureTab === "queue" && <VideoQueuePanel videoQueue={videoQueue} queueForm={queueForm} setQueueForm={setQueueForm} handleQueueSubmit={handleQueueSubmit} socket={socket} canModerate={canModerate} onClose={() => setFeatureTab(null)} />}
+      {featureTab === "donation" && <DonationPanel donations={donations} donationInput={donationInput} setDonationInput={setDonationInput} handleDonation={handleDonation} currentUser={currentUser} onClose={() => setFeatureTab(null)} />}
+      {featureTab === "image" && <ImageProjectionPanel projectedImage={projectedImage} imageUrl={imageUrl} setImageUrl={setImageUrl} handleProjectImage={handleProjectImage} handleUnproject={() => socket.emit("image:unproject")} onClose={() => setFeatureTab(null)} />}
+      {featureTab === "character" && <CharacterPanel userAppearance={userAppearance} setUserAppearance={setUserAppearance} handleCharacter={handleCharacter} onClose={() => setFeatureTab(null)} />}
+      {featureTab === "theme" && <ThemeTogglePanel currentTheme={currentTheme} handleTheme={handleTheme} onClose={() => setFeatureTab(null)} />}
     </div>
   );
 }

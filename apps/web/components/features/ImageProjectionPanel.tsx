@@ -8,9 +8,10 @@ interface ImageProjectionPanelProps {
   setImageUrl: React.Dispatch<React.SetStateAction<string>>;
   handleProjectImage: () => void;
   handleUnproject: () => void;
+  onClose?: () => void;
 }
 
-export function ImageProjectionPanel({ projectedImage, imageUrl, setImageUrl, handleProjectImage, handleUnproject }: ImageProjectionPanelProps) {
+export function ImageProjectionPanel({ projectedImage, imageUrl, setImageUrl, handleProjectImage, handleUnproject, onClose }: ImageProjectionPanelProps) {
   return (
     <div style={{
       position: "fixed", bottom: "80px", left: "50%", transform: "translateX(-50%)",
@@ -20,7 +21,7 @@ export function ImageProjectionPanel({ projectedImage, imageUrl, setImageUrl, ha
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
         <b style={{ fontSize: "15px", color: "#fff" }}>📸 Chiếu ảnh</b>
-        <button onClick={() => {}} style={{ background: "transparent", border: "none", color: "#9ca3af", cursor: "pointer" }}>✕</button>
+        <button onClick={onClose} style={{ background: "transparent", border: "none", color: "#9ca3af", cursor: "pointer" }}>✕</button>
       </div>
       <div style={{ display: "flex", gap: "8px", marginBottom: "10px" }}>
         <input

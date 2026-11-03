@@ -5,9 +5,10 @@ import React from "react";
 interface ThemeTogglePanelProps {
   currentTheme: string;
   handleTheme: (theme: string) => void;
+  onClose?: () => void;
 }
 
-export function ThemeTogglePanel({ currentTheme, handleTheme }: ThemeTogglePanelProps) {
+export function ThemeTogglePanel({ currentTheme, handleTheme, onClose }: ThemeTogglePanelProps) {
   return (
     <div style={{
       position: "fixed", bottom: "80px", left: "50%", transform: "translateX(-50%)",
@@ -17,7 +18,7 @@ export function ThemeTogglePanel({ currentTheme, handleTheme }: ThemeTogglePanel
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
         <b style={{ fontSize: "14px", color: "#fff" }}>🌌 Rạp Trời</b>
-        <button onClick={() => {}} style={{ background: "transparent", border: "none", color: "#9ca3af", cursor: "pointer" }}>✕</button>
+        <button onClick={onClose} style={{ background: "transparent", border: "none", color: "#9ca3af", cursor: "pointer" }}>✕</button>
       </div>
       <button
         onClick={() => handleTheme(currentTheme === "sky" ? "main" : "sky")}
