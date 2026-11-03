@@ -21,7 +21,7 @@ app.get("/health", async (_req, res) => {
   } catch {}
   res.json({
     ok: true,
-    service: "tcg-cinema-realtime",
+    service: "cinema-online-3d-realtime",
     database: dbOk ? "connected" : "error",
     time: new Date().toISOString()
   });
@@ -82,6 +82,106 @@ function checkRateLimit(store: Map<string, number[]>, key: string, limit: number
 
 const chatRateLimits = new Map<string, number[]>();
 const reactionRateLimits = new Map<string, number[]>();
+
+// ==================== MISSION / EXP / LEADERBOARD ====================
+const MISSION_DEFS: Record<string, { label: string; exp: number; target: number }> = {
+  daily_checkin: { label: "Chào buổi sáng", exp: 5, target: 1 },
+  chat_5: { label: "Trò chuyện sôi nổi", exp: 10, target: 5 },
+  video_approved: { label: "Gửi video hay", exp: 15, target: 1 },
+  watch_30min: { label: "Ngồi xem cùng nhau", exp: 10, target: 1 },
+  support: { label: "Ủng hộ rạp", exp: 20, target: 1 },
+  invite: { label: "Chia sẻ rạp", exp: 15, target: 1 },
+};
+
+function getLevel(exp: number): number {
+  return Math.floor(exp / 100) + 1;
+}
+
+// roomCode -> Map(userId -> { shirtColor?, hairStyle?, accessory? })
+const roomAppearance = new Map<string, Map<string, { shirtColor?: string; hairStyle?: string; accessory?: string }>>();
+// roomCode -> Map(userId -> { chatCount, lastCheckinDate, watchHeartbeatAt })
+const roomMissionStats = new Map<string, Map<string, { chatCount: number; lastCheckinDate: string; watchHeartbeatAt: number }>>();
+// roomCode -> { skipVotes: Set<string> }
+const roomSkipVotes = new Map<string, { skipVotes: Set<string> }>();
+// roomCode -> video queue items (memory mirror of DB)
+const roomVideoQueue = new Map<string, Array<{
+  id: string;
+  title: string;
+  sourceUrl: string;
+  type: string;
+  status: string;
+  addedBy: string;
+  addedByName: string;
+  createdAt: number;
+}>>();
+// roomCode -> projected image info
+const roomProjectedImage = new Map<string, { url: string; setBy: string; setByName: string; setAt: number } | null>();
+
+async function ensureMission(userId: string, roomId: string, missionKey: string) {
+  const def = MISSION_DEFS[missionKey];
+  if (!def) return null;
+  let mp = await prisma.missionProgress.findUnique({
+    where: { userId_roomId_missionKey: { userId, roomId, missionKey } },
+  });
+  if (!mp) {
+    mp = await prisma.missionProgress.create({
+      data: { userId, roomId, missionKey, progress: 0, target: def.target, completed: false, claimed: false, expReward: def.exp },
+    });
+  }
+  return mp;
+}
+
+async function updateMissionProgress(userId: string, roomId: string, missionKey: string, increment = 1) {
+  const mp = await ensureMission(userId, roomId, missionKey);
+  if (!mp || mp.claimed) return;
+  const def = MISSION_DEFS[missionKey];
+  let newProgress = Math.min(mp.progress + increment, def.target);
+  let completed = mp.completed || newProgress >= def.target;
+  await prisma.missionProgress.update({
+    where: { id: mp.id },
+    data: { progress: newProgress, completed, updatedAt: new Date() },
+  });
+  if (completed && !mp.claimed) {
+    // Notify client to claim
+    io.to(roomId).emit("mission:ready", { userId, missionKey, label: def.label, exp: def.exp });
+  }
+}
+
+async function claimMissionReward(userId: string, roomId: string, missionKey: string) {
+  const mp = await prisma.missionProgress.findUnique({
+    where: { userId_roomId_missionKey: { userId, roomId, missionKey } },
+  });
+  if (!mp || mp.completed !== true || mp.claimed === true) return null;
+  const def = MISSION_DEFS[missionKey];
+  await prisma.user.update({ where: { id: userId }, data: { exp: { increment: def.exp } } });
+  await prisma.missionProgress.update({ where: { id: mp.id }, data: { claimed: true } });
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, exp: true, displayName: true } });
+  return { missionKey, exp: def.exp, level: getLevel(user!.exp), user };
+}
+
+async function getRoomLeaderboard(roomCode: string, tab: "level" | "support") {
+  const room = await prisma.room.findUnique({ where: { code: roomCode }, select: { id: true } });
+  if (!room) return [];
+  const members = await prisma.roomMember.findMany({
+    where: { roomId: room.id, leftAt: null },
+    select: { userId: true, role: true, user: { select: { id: true, displayName: true, avatarUrl: true, exp: true, totalDonated: true, shirtColor: true, hairStyle: true, accessory: true } } },
+  });
+  const list = members.map(m => ({
+    userId: m.userId,
+    displayName: m.user.displayName,
+    avatarUrl: m.user.avatarUrl,
+    role: m.role,
+    exp: m.user.exp,
+    level: getLevel(m.user.exp),
+    totalDonated: m.user.totalDonated,
+    shirtColor: m.user.shirtColor,
+    hairStyle: m.user.hairStyle,
+    accessory: m.user.accessory,
+  }));
+  if (tab === "level") list.sort((a, b) => b.exp - a.exp);
+  else list.sort((a, b) => b.totalDonated - a.totalDonated);
+  return list.slice(0, 50);
+}
 
 function cleanCode(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -586,6 +686,271 @@ io.on("connection", (socket: Socket) => {
     });
   });
 
+  // ==================== MISSION: CHECKIN ====================
+  socket.on("checkin:daily", async () => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    const userId = user.userId;
+    if (!code) return socket.emit("app:error", { message: "Chưa vào phòng." });
+    const today = new Date().toISOString().slice(0, 10);
+    const statsMap = roomMissionStats.get(code) || new Map();
+    const st = statsMap.get(userId);
+    if (st && st.lastCheckinDate === today) {
+      return socket.emit("app:error", { message: "Hôm nay đã điểm danh rồi." });
+    }
+    statsMap.set(userId, { ...(st || { chatCount: 0, lastCheckinDate: "", watchHeartbeatAt: 0 }), lastCheckinDate: today });
+    roomMissionStats.set(code, statsMap);
+    await updateMissionProgress(userId, code, "daily_checkin", 1);
+  });
+
+  // ==================== MISSION: CLAIM REWARD ====================
+  socket.on("mission:claim", async ({ missionKey }: { missionKey: string }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    const userId = user.userId;
+    if (!code) return;
+    const reward = await claimMissionReward(userId, code, missionKey);
+    if (reward) {
+      socket.emit("mission:claimed", reward);
+      io.to(code).emit("chat:message", {
+        id: "sys_" + Date.now(),
+        userId: "system",
+        user: "Hệ thống",
+        message: `${reward.user?.displayName ?? "Người dùng"} hoàn thành nhiệm vụ "${MISSION_DEFS[reward.missionKey].label}" và nhận ${reward.exp} EXP!`,
+        createdAt: new Date().toISOString(),
+      });
+      const lb = await getRoomLeaderboard(code, "level");
+      io.to(code).emit("leaderboard:update", { tab: "level", list: lb });
+    }
+  });
+
+  // ==================== LEADERBOARD ====================
+  socket.on("leaderboard:get", async ({ tab }: { tab: "level" | "support" }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    if (!code) return;
+    const list = await getRoomLeaderboard(code, tab);
+    socket.emit("leaderboard:update", { tab, list });
+  });
+
+  // ==================== VIDEO QUEUE ====================
+  socket.on("video:queue", async ({ title, sourceUrl, type, durationMin, hasSubtitle, note }: any) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    const userId = user.userId;
+    if (!code) return;
+    const room = await prisma.room.findUnique({ where: { code }, select: { id: true } });
+    if (!room) return socket.emit("app:error", { message: "Phòng không tồn tại." });
+    const item = await prisma.videoQueueItem.create({
+      data: {
+        roomId: room.id,
+        addedById: userId,
+        title: String(title || "Video"),
+        sourceUrl: String(sourceUrl),
+        type: String(type || "Khác"),
+        durationMin: durationMin || null,
+        hasSubtitle: hasSubtitle || null,
+        note: note || null,
+        status: "PENDING",
+      },
+      include: { addedBy: { select: { displayName: true } } },
+    });
+    const queueItem = {
+      id: item.id,
+      title: item.title,
+      sourceUrl: item.sourceUrl,
+      type: item.type,
+      status: item.status,
+      addedBy: item.addedById,
+      addedByName: item.addedBy.displayName,
+      createdAt: item.createdAt.getTime(),
+    };
+    const q = roomVideoQueue.get(code) || [];
+    q.push(queueItem);
+    roomVideoQueue.set(code, q);
+    io.to(code).emit("video:queue:update", { queue: q });
+    await updateMissionProgress(userId, code, "video_approved", 1);
+  });
+
+  socket.on("video:approve", async ({ itemId, action }: { itemId: string; action: "approve" | "reject" }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    const userId = user.userId;
+    if (!code) return;
+    const room = await prisma.room.findUnique({ where: { code }, select: { id: true, ownerId: true, allowMemberControl: true } });
+    if (!room) return;
+    const member = await prisma.roomMember.findUnique({ where: { roomId_userId: { roomId: room.id, userId } }, select: { role: true } });
+    const isOwner = room.ownerId === userId;
+    const isMod = member?.role === "MODERATOR" || member?.role === "OWNER";
+    if (!isOwner && !isMod && !room.allowMemberControl) {
+      return socket.emit("app:error", { message: "Chủ phòng/quản trị viên mới được duyệt video." });
+    }
+    const newStatus = action === "approve" ? "APPROVED" : "REJECTED";
+    const updated = await prisma.videoQueueItem.update({
+      where: { id: itemId },
+      data: { status: newStatus, approvedById: userId, approvedAt: new Date() },
+      include: { addedBy: { select: { displayName: true } } },
+    });
+    const q = (roomVideoQueue.get(code) || []).map(i => (i.id === itemId ? { ...i, status: newStatus } : i));
+    roomVideoQueue.set(code, q);
+    io.to(code).emit("video:queue:update", { queue: q });
+    io.to(code).emit("chat:message", {
+      id: "sys_" + Date.now(),
+      userId: "system",
+      user: "Hệ thống",
+      message: `Video "${updated.title}" đã được ${action === "approve" ? "DUYỆT" : "TỪ CHỐI"}.`,
+      createdAt: new Date().toISOString(),
+    });
+  });
+
+  socket.on("video:play", async ({ itemId }: { itemId: string }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    const userId = user.userId;
+    if (!code) return;
+    const room = await prisma.room.findUnique({ where: { code }, select: { id: true, ownerId: true, allowMemberControl: true } });
+    if (!room) return;
+    const member = await prisma.roomMember.findUnique({ where: { roomId_userId: { roomId: room.id, userId } }, select: { role: true } });
+    const isOwner = room.ownerId === userId;
+    const isMod = member?.role === "MODERATOR" || member?.role === "OWNER";
+    if (!isOwner && !isMod && !room.allowMemberControl) {
+      return socket.emit("app:error", { message: "Chủ phòng/quản trị viên mới được phát video." });
+    }
+    const item = await prisma.videoQueueItem.findUnique({ where: { id: itemId }, include: { addedBy: { select: { displayName: true } } } });
+    if (!item || item.status !== "APPROVED") return socket.emit("app:error", { message: "Video chưa được duyệt." });
+    await prisma.videoQueueItem.update({ where: { id: itemId }, data: { status: "PLAYING" } });
+    const q = (roomVideoQueue.get(code) || []).map(i => (i.id === itemId ? { ...i, status: "PLAYING" } : i));
+    roomVideoQueue.set(code, q);
+    const pb = roomPlaybacks.get(code);
+    if (pb) {
+      pb.sourceUrl = item.sourceUrl;
+      pb.videoTitle = item.title;
+      pb.isPlaying = true;
+      pb.positionSec = 0;
+      pb.updatedAt = Date.now();
+      roomPlaybacks.set(code, pb);
+      await prisma.playbackState.update({
+        where: { roomId: room.id },
+        data: { isPlaying: true, positionSec: 0, sourceUrl: item.sourceUrl, videoTitle: item.title, updatedAt: new Date() },
+      }).catch(() => {});
+      io.to(code).emit("sync:play", { sourceUrl: item.sourceUrl, videoTitle: item.title, positionSec: 0, isPlaying: true, by: userId });
+      io.to(code).emit("chat:message", {
+        id: "sys_" + Date.now(),
+        userId: "system",
+        user: "Hệ thống",
+        message: `Đang phát: ${item.title} (${item.addedBy.displayName}).`,
+        createdAt: new Date().toISOString(),
+      });
+    }
+  });
+
+  // ==================== VOTE SKIP (35%) ====================
+  socket.on("vote:skip", async () => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    const userId = user.userId;
+    if (!code) return;
+    const usersMap = roomUsers.get(code);
+    if (!usersMap) return;
+    const totalViewers = usersMap.size;
+    if (totalViewers === 0) return;
+    const votes = roomSkipVotes.get(code) || { skipVotes: new Set() };
+    votes.skipVotes.add(userId);
+    roomSkipVotes.set(code, votes);
+    const ratio = votes.skipVotes.size / totalViewers;
+    io.to(code).emit("vote:skip:update", { votes: votes.skipVotes.size, total: totalViewers, ratio });
+    if (ratio >= 0.35) {
+      const q = roomVideoQueue.get(code) || [];
+      const next = q.find(i => i.status === "APPROVED");
+      if (next) {
+        roomSkipVotes.set(code, { skipVotes: new Set() });
+        io.to(code).emit("vote:skip:result", { next });
+      } else {
+        io.to(code).emit("app:error", { message: "Đủ tỷ lệ bỏ qua nhưng hàng chờ trống." });
+      }
+    }
+  });
+
+  // ==================== CHARACTER / APPEARANCE ====================
+  socket.on("character:update", ({ shirtColor, hairStyle, accessory }: { shirtColor?: string; hairStyle?: string; accessory?: string }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    const userId = user.userId;
+    if (!code) return;
+    let appMap = roomAppearance.get(code);
+    if (!appMap) { appMap = new Map(); roomAppearance.set(code, appMap); }
+    appMap.set(userId, { shirtColor, hairStyle, accessory });
+    roomAppearance.set(code, appMap);
+    prisma.user.update({ where: { id: userId }, data: { shirtColor, hairStyle, accessory } }).catch(() => {});
+    const rec = roomUsers.get(code)?.get(userId);
+    io.to(code).emit("character:updated", { userId, shirtColor, hairStyle, accessory, displayName: rec?.displayName, avatarUrl: rec?.avatarUrl });
+  });
+
+  // ==================== DONATION ====================
+  socket.on("donation", async ({ amount, message }: { amount: number; message?: string }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    const userId = user.userId;
+    if (!code) return;
+    const amt = Math.max(1000, Math.min(10000000, Math.floor(amount)));
+    const room = await prisma.room.findUnique({ where: { code }, select: { id: true } });
+    if (!room) return;
+    const donation = await prisma.donation.create({
+      data: { roomId: room.id, userId, amount: amt, message },
+      include: { user: { select: { displayName: true } } },
+    });
+    await prisma.user.update({ where: { id: userId }, data: { balance: { decrement: amt }, totalDonated: { increment: amt } } });
+    const userData = await prisma.user.findUnique({ where: { id: userId }, select: { balance: true, totalDonated: true } });
+    io.to(code).emit("donation:received", { amount: amt, message, userId, displayName: donation.user.displayName, balance: userData?.balance, totalDonated: userData?.totalDonated });
+    io.to(code).emit("chat:message", {
+      id: "sys_" + Date.now(),
+      userId: "system",
+      user: "Hệ thống",
+      message: `${donation.user.displayName} đã ủng hộ ${amt.toLocaleString()}đ cho rạp! ❤️`,
+      createdAt: new Date().toISOString(),
+    });
+    await updateMissionProgress(userId, code, "support", 1);
+    const lb = await getRoomLeaderboard(code, "support");
+    io.to(code).emit("leaderboard:update", { tab: "support", list: lb });
+  });
+
+  // ==================== ROOM THEME (SKY ROOM) ====================
+  socket.on("room:theme", async ({ theme }: { theme: string }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    const userId = user.userId;
+    if (!code) return;
+    const room = await prisma.room.findUnique({ where: { code }, select: { id: true, ownerId: true } });
+    if (!room || room.ownerId !== userId) return socket.emit("app:error", { message: "Chủ phòng mới được đổi rạp." });
+    await prisma.room.update({ where: { code }, data: { theme } });
+    io.to(code).emit("room:theme:changed", { theme });
+    io.to(code).emit("chat:message", {
+      id: "sys_" + Date.now(),
+      userId: "system",
+      user: "Hệ thống",
+      message: theme === "sky" ? "Rạp chuyển sang Rạp Trời 🌌" : "Về rạp chính.",
+      createdAt: new Date().toISOString(),
+    });
+  });
+
+  // ==================== IMAGE PROJECTION ====================
+  socket.on("image:project", ({ url }: { url: string }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    const userId = user.userId;
+    if (!code) return;
+    const rec = roomUsers.get(code)?.get(userId);
+    roomProjectedImage.set(code, { url, setBy: userId, setByName: rec?.displayName || "Người dùng", setAt: Date.now() });
+    io.to(code).emit("image:projected", { url, setBy: userId, setByName: rec?.displayName || "Người dùng" });
+  });
+
+  socket.on("image:unproject", () => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    if (!code) return;
+    roomProjectedImage.set(code, null);
+    io.to(code).emit("image:unprojected");
+  });
+
+  // ==================== WATCH HEARTBEAT ====================
+  socket.on("heartbeat:watch", () => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    const userId = user.userId;
+    if (!code) return;
+    const statsMap = roomMissionStats.get(code) || new Map();
+    const st = statsMap.get(userId);
+    statsMap.set(userId, { ...(st || { chatCount: 0, lastCheckinDate: "", watchHeartbeatAt: 0 }), watchHeartbeatAt: Date.now() });
+    roomMissionStats.set(code, statsMap);
+  });
+
   socket.on("disconnect", () => {
     const meta = socketMeta.get(socket.id);
     if (meta?.roomCode) {
@@ -657,5 +1022,5 @@ io.on("connection", (socket: Socket) => {
 
 const port = Number(process.env.REALTIME_PORT || 4001);
 httpServer.listen(port, "0.0.0.0", () => {
-  console.log(`TCG Cinema Realtime Server listening on :${port}`);
+  console.log(`Cinema Online 3D Realtime Server listening on :${port}`);
 });

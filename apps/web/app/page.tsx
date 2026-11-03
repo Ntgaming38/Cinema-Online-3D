@@ -219,7 +219,7 @@ export default function HomePage() {
             <Film />
           </span>
           <span>
-            <b>TCG Cinema</b>
+            <b>Cinema Online 3D</b>
             <small>Xem phim cùng bạn bè</small>
           </span>
         </Link>
@@ -435,7 +435,7 @@ export default function HomePage() {
 
       {/* Footer */}
       <footer>
-        <span>© 2026 TCG Cinema · Nền tảng xem phim trực tuyến 3D</span>
+        <span>© 2026 Cinema Online 3D · Nền tảng xem phim trực tuyến 3D</span>
         <span>Built with Next.js 15, Three.js, Socket.IO & TiDB Cloud</span>
       </footer>
 

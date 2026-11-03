@@ -31,10 +31,20 @@ model User {
   passwordHash String?       @db.VarChar(255)
   displayName  String        @db.VarChar(40)
   avatarUrl    String?       @db.VarChar(500)
+  exp          Int           @default(0)
+  balance      Int           @default(0)
+  totalDonated Int           @default(0)
+  shirtColor   String?       @db.VarChar(20)
+  hairStyle    String?       @db.VarChar(30)
+  accessory    String?       @db.VarChar(30)
   createdAt    DateTime      @default(now())
   roomsOwned   Room[]        @relation("RoomOwner")
   memberships  RoomMember[]
   messages     ChatMessage[]
+  donations    Donation[]
+  missions     MissionProgress[]
+  videoQueueItemsAddedBy VideoQueueItem[] @relation("VideoQueueAddedBy")
+  videoQueueItemsApprovedBy VideoQueueItem[] @relation("VideoQueueApprovedBy")
 }
 
 model Room {
@@ -47,6 +57,7 @@ model Room {
   maxMembers         Int            @default(100)
   allowMemberControl Boolean        @default(false)
   status             RoomStatus     @default(WAITING)
+  theme              String?        @db.VarChar(20)
   ownerId            String
   owner              User           @relation("RoomOwner", fields: [ownerId], references: [id])
   video              Video?
@@ -55,6 +66,9 @@ model Room {
   messages           ChatMessage[]
   reactions          Reaction[]
   seats              Seat[]
+  videoQueueItems    VideoQueueItem[]
+  donations          Donation[]
+  missionProgress    MissionProgress[]
   createdAt          DateTime       @default(now())
   updatedAt          DateTime       @updatedAt
   @@index([visibility, status, createdAt])
@@ -127,4 +141,62 @@ model Seat {
   z        Float
   room     Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
   @@unique([roomId, label])
+}
+
+enum VideoQueueStatus {
+  PENDING
+  APPROVED
+  PLAYING
+  PLAYED
+  REJECTED
+}
+
+model VideoQueueItem {
+  id          String          @id @default(cuid())
+  roomId      String
+  room        Room            @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  addedById   String
+  addedBy     User            @relation("VideoQueueAddedBy", fields: [addedById], references: [id])
+  title       String          @db.VarChar(200)
+  sourceUrl   String          @db.VarChar(2000)
+  type        String          @db.VarChar(20) // YouTube, TikTok, SoundCloud, Trực tiếp, Khác
+  durationMin String?         @db.VarChar(20) // "under5", "5-20", "over20"
+  hasSubtitle String?         @db.VarChar(20) // "yes", "no", "unknown"
+  note        String?         @db.VarChar(500) // Ghi chú cho người duyệt
+  status      VideoQueueStatus @default(PENDING)
+  approvedById String?
+  approvedBy   User?          @relation("VideoQueueApprovedBy", fields: [approvedById], references: [id])
+  approvedAt   DateTime?
+  createdAt   DateTime        @default(now())
+  @@index([roomId, status])
+  @@index([roomId, createdAt])
+}
+
+model Donation {
+  id          String   @id @default(cuid())
+  roomId      String
+  room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  amount      Int      // số tiền VND
+  message     String?  @db.VarChar(200)
+  createdAt   DateTime @default(now())
+  @@index([roomId, createdAt])
+}
+
+model MissionProgress {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  roomId      String
+  room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  missionKey  String   @db.VarChar(50) // daily_checkin, chat_5, video_approved, watch_30min, support, invite
+  progress    Int      @default(0)
+  target      Int      @default(1)
+  completed   Boolean  @default(false)
+  claimed     Boolean  @default(false)
+  expReward   Int      @default(0)
+  updatedAt   DateTime @updatedAt
+  @@unique([userId, roomId, missionKey])
+  @@index([userId, completed])
 }

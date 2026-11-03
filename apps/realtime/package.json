@@ -1,5 +1,5 @@
 {
-  "name": "@tcg-cinema/realtime",
+  "name": "@cinema-online-3d/realtime",
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",

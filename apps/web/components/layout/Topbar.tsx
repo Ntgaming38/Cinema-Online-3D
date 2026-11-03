@@ -30,7 +30,7 @@ export default function Topbar({
       <div className="topbar-inner">
         <Link href="/" className="brand" style={{ display: "flex", alignItems: "center", gap: "10px", textDecoration: "none" }}>
           <div className="brand-mark"><svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></svg></div>
-          <div><b style={{ fontSize: "17px", letterSpacing: "-0.5px" }}>TCG Cinema</b><small>Xem phim cùng bạn bè</small></div>
+          <div><b style={{ fontSize: "17px", letterSpacing: "-0.5px" }}>Cinema Online 3D</b><small>Xem phim cùng bạn bè</small></div>
         </Link>
         <nav className="desktop-nav" style={{ gap: "28px" }}>
           <Link href="/" className="nav-item" style={{ display: "flex", alignItems: "center", gap: "6px", color: "#c3bdd0", fontSize: "13px", fontWeight: 500 }}>

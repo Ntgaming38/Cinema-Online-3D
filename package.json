@@ -1,5 +1,5 @@
 {
-  "name": "tcg-cinema",
+  "name": "cinema-online-3d",
   "private": true,
   "workspaces": [
     "apps/*",

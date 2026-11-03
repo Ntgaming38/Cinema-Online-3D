@@ -36,6 +36,7 @@ import {
 import { CinemaVideoPlayer, CinemaVideoPlayerRef } from "@/components/video/CinemaVideoPlayer";
 import { TheaterScene, SeatOccupant } from "@/components/theater/TheaterScene";
 import { parseVideoUrl } from "@/lib/video-parser";
+import { FeaturePanels } from "@/components/features/FeaturePanels";
 
 interface ChatItem {
   id: string;
@@ -68,7 +69,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
   // User State
-  const [currentUser, setCurrentUser] = useState<{ id: string; displayName: string; avatarUrl?: string; isGuest?: boolean } | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ id: string; displayName: string; avatarUrl?: string; isGuest?: boolean; balance?: number; totalDonated?: number } | null>(null);
   const [authToken, setAuthToken] = useState<string>("");
   const [sessionReady, setSessionReady] = useState(false);
 
@@ -103,6 +104,21 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   const [showChatPanel, setShowChatPanel] = useState(true);
   const [showRoomInfo, setShowRoomInfo] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // ==================== NEW FEATURES STATE ====================
+  const [featureTab, setFeatureTab] = useState<"mission" | "leaderboard" | "queue" | "character" | "donation" | "image" | "theme" | null>(null);
+  const [missions, setMissions] = useState<Array<{ key: string; label: string; exp: number; progress: number; target: number; completed: boolean; claimed: boolean }>>([]);
+  const [leaderboard, setLeaderboard] = useState<Array<{ userId: string; displayName: string; avatarUrl?: string; role: string; exp: number; level: number; totalDonated: number; shirtColor?: string; hairStyle?: string; accessory?: string }>>([]);
+  const [leaderboardTab, setLeaderboardTab] = useState<"level" | "support">("level");
+  const [videoQueue, setVideoQueue] = useState<Array<{ id: string; title: string; sourceUrl: string; type: string; status: string; addedBy: string; addedByName: string; createdAt: number }>>([]);
+  const [queueForm, setQueueForm] = useState({ title: "", sourceUrl: "", type: "YouTube", durationMin: "under5", hasSubtitle: "no", note: "" });
+  const [skipVote, setSkipVote] = useState({ votes: 0, total: 0, ratio: 0 });
+  const [appearance, setAppearance] = useState<{ shirtColor?: string; hairStyle?: string; accessory?: string }>({});
+  const [donations, setDonations] = useState<Array<{ amount: number; message?: string; userId: string; displayName: string; createdAt: string }>>([]);
+  const [donationInput, setDonationInput] = useState("");
+  const [projectedImage, setProjectedImage] = useState<{ url: string; setByName: string } | null>(null);
+  const [roomTheme, setRoomTheme] = useState("main");
+  const [userAppearance, setUserAppearance] = useState<{ shirtColor?: string; hairStyle?: string; accessory?: string }>({});
+
   const [showChangeVideoModal, setShowChangeVideoModal] = useState(false);
   const [newVideoInput, setNewVideoInput] = useState("");
   const [newTitleInput, setNewTitleInput] = useState("");
@@ -500,7 +516,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
             <Play size={18} fill="#fff" color="#fff" />
           </div>
           <div>
-            <b style={{ fontSize: "16px", letterSpacing: "0.5px", color: "#fff" }}>TCG Cinema</b>
+            <b style={{ fontSize: "16px", letterSpacing: "0.5px", color: "#fff" }}>Cinema Online 3D</b>
             <small style={{ display: "block", fontSize: "10px", color: "#a78bfa" }}>Xem phim cùng bạn bè</small>
           </div>
         </Link>
@@ -914,6 +930,42 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
             </form>
           </div>
         </div>
+      )}
+      {connected && socketRef.current && (
+      <FeaturePanels
+        socket={socketRef.current}
+        userId={currentUser?.id || ""}
+        displayName={currentUser?.displayName || "Người dùng"}
+        avatarUrl={currentUser?.avatarUrl}
+        roomCode={roomCode}
+        currentTheme={roomTheme}
+        onThemeChange={t => setRoomTheme(t)}
+        currentUser={currentUser}
+        missions={missions}
+        setMissions={setMissions}
+        leaderboard={leaderboard}
+        setLeaderboard={setLeaderboard}
+        leaderboardTab={leaderboardTab}
+        setLeaderboardTab={setLeaderboardTab}
+        videoQueue={videoQueue}
+        setVideoQueue={setVideoQueue}
+        queueForm={queueForm}
+        setQueueForm={setQueueForm}
+        skipVote={skipVote}
+        setSkipVote={setSkipVote}
+        appearance={appearance}
+        setAppearance={setAppearance}
+        userAppearance={userAppearance}
+        setUserAppearance={setUserAppearance}
+        donations={donations}
+        setDonations={setDonations}
+        donationInput={donationInput}
+        setDonationInput={setDonationInput}
+        projectedImage={projectedImage}
+        setProjectedImage={setProjectedImage}
+        featureTab={featureTab}
+        setFeatureTab={setFeatureTab}
+      />
       )}
     </div>
   );
