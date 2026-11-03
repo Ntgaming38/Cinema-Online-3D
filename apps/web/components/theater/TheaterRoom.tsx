@@ -34,7 +34,7 @@ import {
   Sparkles
 } from "lucide-react";
 import { CinemaVideoPlayer, CinemaVideoPlayerRef } from "@/components/video/CinemaVideoPlayer";
-import { TheaterScene, SeatOccupant } from "@/components/theater/TheaterScene";
+import { TheaterScene, SeatOccupant, ViewMode } from "@/components/theater/TheaterScene";
 import { parseVideoUrl } from "@/lib/video-parser";
 import { FeaturePanels } from "@/components/features/FeaturePanels";
 
@@ -67,6 +67,26 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   const router = useRouter();
   const socketRef = useRef<Socket | null>(null);
   const playerRef = useRef<CinemaVideoPlayerRef>(null);
+  // Camera view: panorama / wide / stage / pov (from the viewer's seat).
+  const [viewMode, setViewMode] = useState<ViewMode>("wide");
+  // Disco mode (room-synced via socket): laser beams + beat flashes.
+  const [discoMode, setDiscoMode] = useState(false);
+  // Render sharpness (device pixel ratio cap), remembered per device.
+  const [quality, setQuality] = useState<number>(() => {
+    try {
+      const q = Number(localStorage.getItem("cinema-quality"));
+      return [1, 1.5, 2].includes(q) ? q : 1.5;
+    } catch {
+      return 1.5;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("cinema-quality", String(quality));
+    } catch {}
+  }, [quality]);
+  // The 3D scene projects the screen's corners onto this element every frame.
+  const screenOverlayRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
   // User State
@@ -88,7 +108,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   const [userRole, setUserRole] = useState<"OWNER" | "MODERATOR" | "MEMBER">("MEMBER");
   const [allowMemberControl, setAllowMemberControl] = useState(false);
 
-  const [sourceUrl, setSourceUrl] = useState("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+  const [sourceUrl, setSourceUrl] = useState("https://www.youtube.com/watch?v=XJJ92B5adyg");
   const [videoTitle, setVideoTitle] = useState("One Piece Film: Red");
   const [isPlaying, setIsPlaying] = useState(false);
 
@@ -371,6 +391,10 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
     socket.on("room:theme:changed", (data: { theme: string }) => {
       setRoomTheme(data.theme);
+    });
+
+    socket.on("room:disco:changed", (data: { disco: boolean }) => {
+      setDiscoMode(!!data.disco);
     });
 
     socket.on("image:projected", (data: { url: string; setByName: string }) => {
@@ -794,10 +818,14 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                 theme={roomTheme}
                 recentReactions={sceneReactions}
                 onSelectSeat={handleSelectSeat}
+                viewMode={viewMode}
+                screenOverlayRef={screenOverlayRef}
+                disco={discoMode}
+                quality={quality}
               />
 
               {/* Video player overlaid exactly onto the 3D cinema screen */}
-              <div className="room-screen-overlay">
+              <div className="room-screen-overlay" ref={screenOverlayRef}>
                 <CinemaVideoPlayer
                   ref={playerRef}
                   sourceUrl={sourceUrl}
@@ -846,6 +874,48 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                   style={{ display: "inline-flex", alignItems: "center", gap: "5px", background: "transparent", color: "#c4b5fd", border: "none", padding: "6px 10px", fontSize: "11px", cursor: "pointer" }}
                 >
                   <BarChart2 size={13} /> Bình chọn bỏ qua{skipVote.total > 0 ? ` · ${Math.round(skipVote.ratio * 100)}%` : ""}
+                </button>
+
+                {/* Camera views: panorama / wide / stage / audience seat */}
+                <div style={{ display: "inline-flex", alignItems: "center", gap: "2px", borderLeft: "1px solid rgba(139, 92, 246, 0.25)", paddingLeft: "8px" }}>
+                  {([
+                    ["panorama", "🔭", "Toàn cảnh", "Nhìn từ trên cao xuống toàn bộ phòng"],
+                    ["wide", "🖥", "Góc rộng", "Toàn bộ rạp: sân khấu, màn hình và tất cả các hàng ghế"],
+                    ["stage", "🎭", "Sân khấu", "Đứng gần sân khấu, màn hình choán tầm mắt"],
+                    ["pov", "💺", "Khán giả", "Ngồi vào ghế của bạn và nhìn lên màn hình như đang ở trong rạp"],
+                  ] as Array<[ViewMode, string, string, string]>).map(([mode, icon, label, title]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setViewMode(mode)}
+                      title={title}
+                      style={{ display: "inline-flex", alignItems: "center", gap: "5px", background: viewMode === mode ? "#3b1e5a" : "transparent", color: viewMode === mode ? "#fff" : "#c4b5fd", border: "none", borderRadius: "20px", padding: "6px 10px", fontSize: "11px", fontWeight: 600, cursor: "pointer" }}
+                    >
+                      {icon} {label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Sharpness (render quality) */}
+                <select
+                  value={quality}
+                  onChange={(e) => setQuality(Number(e.target.value))}
+                  title="Độ nét hình ảnh 3D — Mượt cho máy yếu, Siêu nét cho máy khỏe"
+                  style={{ background: "#1b1429", color: "#c4b5fd", border: "1px solid rgba(139, 92, 246, 0.35)", borderRadius: "20px", padding: "5px 8px", fontSize: "11px", fontWeight: 600, cursor: "pointer", outline: "none" }}
+                >
+                  <option value={1}>Mượt</option>
+                  <option value={1.5}>Nét</option>
+                  <option value={2}>Siêu nét</option>
+                </select>
+
+                {/* Disco mode toggle (host/moderator; synced to the whole room) */}
+                <button
+                  type="button"
+                  onClick={() => socketRef.current?.emit("room:disco", { disco: !discoMode })}
+                  title="Bật/tắt đèn laser & flash theo nhịp cho cả phòng (chủ phòng/quản trị viên)"
+                  style={{ display: "inline-flex", alignItems: "center", gap: "5px", background: discoMode ? "linear-gradient(135deg, #db2777, #7c3aed)" : "transparent", color: discoMode ? "#fff" : "#c4b5fd", border: "none", borderRadius: "20px", padding: "6px 10px", fontSize: "11px", fontWeight: 700, cursor: "pointer" }}
+                >
+                  🪩 Disco
                 </button>
 
                 <button

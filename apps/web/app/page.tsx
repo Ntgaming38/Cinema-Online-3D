@@ -73,8 +73,8 @@ export default function HomePage() {
   const [roomPassword, setRoomPassword] = useState("");
   const [roomMaxMembers, setRoomMaxMembers] = useState(50);
   const [roomAllowMemberControl, setRoomAllowMemberControl] = useState(false);
-  const [initialVideoUrl, setInitialVideoUrl] = useState("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
-  const [initialVideoTitle, setInitialVideoTitle] = useState("Big Buck Bunny / Featured Video");
+  const [initialVideoUrl, setInitialVideoUrl] = useState("https://www.youtube.com/watch?v=XJJ92B5adyg");
+  const [initialVideoTitle, setInitialVideoTitle] = useState("Video mặc định");
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const [createError, setCreateError] = useState("");
 

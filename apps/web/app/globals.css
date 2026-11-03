@@ -753,8 +753,10 @@ footer {
 /* ONE unified theater frame: the 3D canvas (stage, curtains, presenter, seats,
    audience) fills the whole frame and the HTML video player is overlaid exactly
    onto the 3D screen — like the reference mockup, not two split frames.
-   The frame keeps a constant ~1.27 aspect (letterboxed, centered) so the fixed
-   3D camera composition — and the overlay percentages — hold at every size. */
+   The frame keeps a constant ~1.27 aspect (letterboxed, centered); the video
+   overlay is positioned by projecting the screen's corners through the camera
+   every frame (see ScreenTracker in TheaterScene), so it stays glued to the
+   screen at any size and in both camera views. */
 .room-stage-frame {
   position: relative;
   flex: none;
@@ -786,20 +788,60 @@ footer {
   background: #000;
   box-shadow: 0 0 34px rgba(139, 92, 246, 0.35);
 }
+/* Once the 3D scene's ScreenTracker takes over (first projected frame), the
+   overlay gets a fixed 1280×720 layout box at the frame's origin and a CSS
+   perspective transform warps it onto the screen quad every frame — the
+   video then matches the 3D screen exactly at any size and camera angle.
+   The % rules above remain only as a pre-JS fallback. */
+.room-screen-overlay[data-projected="1"] {
+  left: 0;
+  top: 0;
+  width: 1280px;
+  height: 720px;
+  aspect-ratio: auto;
+  transform-origin: 0 0;
+  will-change: transform;
+}
 .room-screen-overlay .cinema-player-shell {
+  position: relative;
   width: 100% !important;
   height: 100% !important;
   min-height: 0;
   border: 0 !important;
   border-radius: 0 !important;
 }
+/* The video picture fills the WHOLE overlay (= the whole 3D screen); the
+   progress bar and the control row float over its bottom edge instead of
+   eating into the picture, which is what used to push the video out of
+   alignment with the screen frame. */
 .room-screen-overlay .cinema-player-shell > div:first-child {
-  flex: 1 1 auto;
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
   min-height: 0 !important;
   aspect-ratio: auto !important;
 }
-.room-screen-overlay .cinema-player-shell > div:nth-child(2) { padding: 4px 10px 2px !important; }
-.room-screen-overlay .cinema-player-shell > div:nth-child(3) { min-height: 38px; padding: 5px 10px !important; }
+.room-screen-overlay .cinema-player-shell > div:nth-child(2) {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 40px;
+  z-index: 5;
+  padding: 16px 12px 2px !important;
+  background: linear-gradient(180deg, transparent, rgba(5, 3, 10, 0.85)) !important;
+}
+.room-screen-overlay .cinema-player-shell > div:nth-child(3) {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  min-height: 40px;
+  padding: 5px 10px !important;
+  background: rgba(5, 3, 10, 0.82) !important;
+  border-top: 0 !important;
+}
 .room-screen-overlay .cinema-player-shell > div:nth-child(3) > div:last-child > span { display: none; }
 
 .room-info-card {

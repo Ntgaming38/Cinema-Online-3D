@@ -136,6 +136,7 @@ const roomVideoQueue = new Map<string, Array<{
 }>>();
 // roomCode -> projected image info
 const roomProjectedImage = new Map<string, { url: string; setBy: string; setByName: string; setAt: number } | null>();
+const roomDisco = new Map<string, boolean>();
 
 async function ensureMission(userId: string, roomId: string, missionKey: string) {
   const def = MISSION_DEFS[missionKey];
@@ -542,6 +543,7 @@ io.on("connection", (socket: Socket) => {
       if (room.theme) socket.emit("room:theme:changed", { theme: room.theme });
       const projected = roomProjectedImage.get(code);
       if (projected) socket.emit("image:projected", { url: projected.url, setBy: projected.setBy, setByName: projected.setByName });
+      if (roomDisco.get(code)) socket.emit("room:disco:changed", { disco: true });
 
       // Announce arrival if first tab for this user
       if (userRecord.sockets.size === 1) {
@@ -1125,6 +1127,27 @@ io.on("connection", (socket: Socket) => {
       userId: "system",
       user: "Hệ thống",
       message: theme === "sky" ? "Rạp chuyển sang Rạp Trời 🌌" : "Về rạp chính.",
+      createdAt: new Date().toISOString(),
+    });
+  });
+
+  // ==================== DISCO MODE (LASER + FLASH) ====================
+  socket.on("room:disco", async ({ disco }: { disco: boolean }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    const userId = user.userId;
+    if (!code) return;
+    const room = await prisma.room.findUnique({ where: { code }, select: { id: true, ownerId: true } });
+    if (!room) return;
+    const member = await prisma.roomMember.findUnique({ where: { roomId_userId: { roomId: room.id, userId } }, select: { role: true } });
+    const canToggleDisco = room.ownerId === userId || member?.role === "MODERATOR" || member?.role === "OWNER";
+    if (!canToggleDisco) return socket.emit("app:error", { message: "Chủ phòng/quản trị viên mới được bật/tắt disco." });
+    roomDisco.set(code, !!disco);
+    io.to(code).emit("room:disco:changed", { disco: !!disco });
+    io.to(code).emit("chat:message", {
+      id: "sys_" + Date.now(),
+      userId: "system",
+      user: "Hệ thống",
+      message: disco ? "Chế độ Disco BẬT 🪩 — laser & flash theo nhịp 137 BPM!" : "Chế độ Disco TẮT.",
       createdAt: new Date().toISOString(),
     });
   });
