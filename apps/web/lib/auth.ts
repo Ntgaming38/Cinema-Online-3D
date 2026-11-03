@@ -3,6 +3,10 @@ import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
 
+// Production MUST provide a strong JWT_SECRET; the shared literal is a dev-only fallback.
+if (process.env.NODE_ENV === "production" && !process.env.JWT_SECRET) {
+  throw new Error("JWT_SECRET is required in production");
+}
 const JWT_SECRET = process.env.JWT_SECRET || "tcg-cinema-secret-key-prod-2026-tidb";
 export const AUTH_COOKIE_NAME = "cinema_token";
 

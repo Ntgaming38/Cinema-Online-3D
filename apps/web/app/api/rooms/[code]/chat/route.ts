@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getCurrentUserFromRequest } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ code: string }> }
 ) {
   try {
@@ -13,11 +14,28 @@ export async function GET(
 
     const room = await prisma.room.findUnique({
       where: { code: cleanCode },
-      select: { id: true }
+      select: { id: true, visibility: true, passwordHash: true, ownerId: true }
     });
 
     if (!room) {
       return NextResponse.json({ error: "Phòng không tồn tại." }, { status: 404 });
+    }
+
+    // Private rooms: chat history is members-only (password verified -> membership granted).
+    if (room.visibility === "PRIVATE" && room.passwordHash) {
+      const session = await getCurrentUserFromRequest(request);
+      if (!session) {
+        return NextResponse.json({ error: "Bạn chưa đăng nhập." }, { status: 401 });
+      }
+      if (session.userId !== room.ownerId) {
+        const membership = await prisma.roomMember.findUnique({
+          where: { roomId_userId: { roomId: room.id, userId: session.userId } },
+          select: { id: true, leftAt: true }
+        });
+        if (!membership) {
+          return NextResponse.json({ error: "Phòng riêng tư: bạn chưa có quyền xem lịch sử chat." }, { status: 403 });
+        }
+      }
     }
 
     const messages = await prisma.chatMessage.findMany({

@@ -7,9 +7,12 @@ interface VideoQueuePanelProps {
   queueForm: any;
   setQueueForm: React.Dispatch<React.SetStateAction<any>>;
   handleQueueSubmit: (e: React.FormEvent) => void;
+  socket?: any;
+  canModerate?: boolean;
+  onClose?: () => void;
 }
 
-export function VideoQueuePanel({ videoQueue, queueForm, setQueueForm, handleQueueSubmit }: VideoQueuePanelProps) {
+export function VideoQueuePanel({ videoQueue, queueForm, setQueueForm, handleQueueSubmit, socket, canModerate, onClose }: VideoQueuePanelProps) {
   return (
     <div style={{
       position: "fixed", bottom: "80px", left: "20px", width: "340px",
@@ -18,7 +21,7 @@ export function VideoQueuePanel({ videoQueue, queueForm, setQueueForm, handleQue
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
         <b style={{ fontSize: "15px", color: "#fff" }}>📥 Hàng chờ video</b>
-        <button onClick={() => {}} style={{ background: "transparent", border: "none", color: "#9ca3af", cursor: "pointer" }}>✕</button>
+        <button onClick={onClose} style={{ background: "transparent", border: "none", color: "#9ca3af", cursor: "pointer" }}>✕</button>
       </div>
       <form onSubmit={handleQueueSubmit} style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "12px" }}>
         <input
@@ -55,12 +58,23 @@ export function VideoQueuePanel({ videoQueue, queueForm, setQueueForm, handleQue
       <div style={{ fontSize: "11px", color: "#9ca3af", marginBottom: "8px" }}>{videoQueue.length} mục trong hàng chờ</div>
       <div style={{ overflowY: "auto", maxHeight: "200px", fontSize: "11px" }}>
         {videoQueue.map((q: any) => (
-          <div key={q.id} style={{ padding: "6px 0", borderBottom: "1px solid rgba(168, 85, 247, 0.15)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ color: "#e2e8f0" }}>{q.title}</div>
-              <div style={{ color: "#9ca3af" }}>{q.addedByName}</div>
+          <div key={q.id} style={{ padding: "6px 0", borderBottom: "1px solid rgba(168, 85, 247, 0.15)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: "#e2e8f0" }}>{q.title}</div>
+                <div style={{ color: "#9ca3af" }}>{q.addedByName}</div>
+              </div>
+              <span style={{ color: q.status === "APPROVED" ? "#4ade80" : q.status === "REJECTED" ? "#f87171" : q.status === "PLAYING" ? "#38bdf8" : "#fbbf24", fontWeight: 700 }}>{q.status === "PENDING" ? "ĐANG DUYỆT" : q.status === "APPROVED" ? "ĐÃ DUYỆT" : q.status === "PLAYING" ? "ĐANG PHÁT" : q.status === "PLAYED" ? "ĐÃ PHÁT" : "TỪ CHỐI"}</span>
             </div>
-            <span style={{ color: q.status === "APPROVED" ? "#4ade80" : q.status === "REJECTED" ? "#f87171" : "#fbbf24" }}>{q.status}</span>
+            {canModerate && socket && q.status === "PENDING" && (
+              <div style={{ display: "flex", gap: "6px", marginTop: "5px" }}>
+                <button onClick={() => socket.emit("video:approve", { itemId: q.id, action: "approve" })} style={{ background: "#14532d", border: "1px solid #22c55e", color: "#bbf7d0", borderRadius: "6px", padding: "3px 10px", fontSize: "11px", fontWeight: 700, cursor: "pointer" }}>✓ Duyệt</button>
+                <button onClick={() => socket.emit("video:approve", { itemId: q.id, action: "reject" })} style={{ background: "#450a0a", border: "1px solid #ef4444", color: "#fecaca", borderRadius: "6px", padding: "3px 10px", fontSize: "11px", fontWeight: 700, cursor: "pointer" }}>✕ Từ chối</button>
+              </div>
+            )}
+            {canModerate && socket && q.status === "APPROVED" && (
+              <button onClick={() => socket.emit("video:play", { itemId: q.id })} style={{ marginTop: "5px", background: "linear-gradient(135deg,#8b5cf6,#7c3aed)", border: "none", color: "#fff", borderRadius: "6px", padding: "4px 12px", fontSize: "11px", fontWeight: 700, cursor: "pointer" }}>▶ Phát ngay</button>
+            )}
           </div>
         ))}
         {videoQueue.length === 0 && <div style={{ fontSize: "11px", color: "#9ca3af", fontStyle: "italic" }}>Chưa có video nào trong hàng chờ</div>}

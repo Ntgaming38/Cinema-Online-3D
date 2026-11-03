@@ -6,9 +6,10 @@ interface CharacterPanelProps {
   userAppearance: { shirtColor?: string; hairStyle?: string; accessory?: string };
   setUserAppearance: React.Dispatch<React.SetStateAction<{ shirtColor?: string; hairStyle?: string; accessory?: string }>>;
   handleCharacter: () => void;
+  onClose?: () => void;
 }
 
-export function CharacterPanel({ userAppearance, setUserAppearance, handleCharacter }: CharacterPanelProps) {
+export function CharacterPanel({ userAppearance, setUserAppearance, handleCharacter, onClose }: CharacterPanelProps) {
   const HAIR_STYLES = [
     "Tóc ngắn", "Tóc dài", "Tóc búi", "Tóc xoăn", "Tóc vuốt", "Tóc mái",
     "Tóc 2 bím", "Tóc dài thẳng", "Tóc tém", "Tóc chỏm", "Tóc undercut",
@@ -26,7 +27,7 @@ export function CharacterPanel({ userAppearance, setUserAppearance, handleCharac
     }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
         <b style={{ fontSize: "15px", color: "#fff" }}>👤 Ngoại hình nhân vật</b>
-        <button onClick={() => {}} style={{ background: "transparent", border: "none", color: "#9ca3af", cursor: "pointer" }}>✕</button>
+        <button onClick={onClose} style={{ background: "transparent", border: "none", color: "#9ca3af", cursor: "pointer" }}>✕</button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
         <div>

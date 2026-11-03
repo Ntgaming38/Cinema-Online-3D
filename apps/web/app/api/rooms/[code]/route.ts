@@ -39,7 +39,11 @@ export async function GET(
     const isMember = room.members.some(m => m.userId === session?.userId);
     const isPasswordProtected = Boolean(room.passwordHash);
 
-    // If private and user not authenticated as owner/member, require password
+    // Private rooms: non-members only learn that the room exists and is locked.
+    // Video/playback/member data is withheld until they are owner/member
+    // (membership is granted by the verify-password route after a correct password).
+    const canAccessContent = room.visibility !== "PRIVATE" || !isPasswordProtected || isOwner || isMember;
+
     return NextResponse.json({
       room: {
         id: room.id,
@@ -54,9 +58,9 @@ export async function GET(
         isOwner,
         isMember,
         owner: room.owner,
-        video: room.video,
-        playback: room.playback,
-        activeMemberCount: room.members.length,
+        video: canAccessContent ? room.video : null,
+        playback: canAccessContent ? room.playback : null,
+        activeMemberCount: canAccessContent ? room.members.length : 0,
         createdAt: room.createdAt
       }
     });
