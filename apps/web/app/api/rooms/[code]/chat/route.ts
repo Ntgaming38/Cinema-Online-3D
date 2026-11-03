@@ -2,6 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserFromRequest } from "@/lib/auth";
 
+type ChatMessageWithUser = {
+  id: string;
+  userId: string;
+  content: string;
+  createdAt: Date;
+  user: {
+    displayName: string;
+    avatarUrl: string | null;
+  };
+};
+
 export const runtime = "nodejs";
 
 export async function GET(
@@ -54,7 +65,7 @@ export async function GET(
     });
 
     // Return in chronological order
-    const formatted = messages.reverse().map(m => ({
+    const formatted = (messages as ChatMessageWithUser[]).reverse().map((m) => ({
       id: m.id,
       userId: m.userId,
       user: m.user.displayName,

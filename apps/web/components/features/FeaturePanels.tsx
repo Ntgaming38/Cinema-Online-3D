@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect } from "react";
 import {
-  Trophy, BarChart2, Film, Check, X, Timer, Heart, User, Share2,
-  Image, Globe, Palette, Scissors, Send, Plus, Maximize, Minimize,
+  Trophy, BarChart2, Film, Check, X, Timer, User, Share2,
+  Send, Plus, Maximize, Minimize,
   MessageSquare, Users, ArrowLeft, ChevronRight, ChevronLeft
 } from "lucide-react";
 import { LeaderboardPanel } from "./LeaderboardPanel";
@@ -83,12 +83,10 @@ export function FeaturePanels(props: FeaturePanelsProps) {
   const [showQueue, setShowQueue] = useState(false);
   const [showCharacter, setShowCharacter] = useState(false);
   const [showDonation, setShowDonation] = useState(false);
-  const [showImage, setShowImage] = useState(false);
   const [copyTooltip, setCopyTooltip] = useState(false);
   const [imageUrl, setImageUrl] = useState("");
 
   const handleClaim = (key: string) => socket.emit("mission:claim", { missionKey: key });
-  const handleSkip = () => socket.emit("vote:skip");
   const handleCharacter = () => socket.emit("character:update", { ...userAppearance });
   const handleQueueSubmit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -124,9 +122,9 @@ export function FeaturePanels(props: FeaturePanelsProps) {
   );
 
   return (
-    <div>
+    <div className="room-feature-panels">
       {/* FEATURE TOOLBAR */}
-      <div style={{ position: "absolute", top: "110px", left: "50%", transform: "translateX(-50%)",
+      <div className="room-feature-toolbar" style={{ position: "fixed", right: "16px", bottom: "72px", left: "auto", top: "auto", transform: "none",
         display: "flex", gap: "6px", background: "rgba(168, 85, 247, 0.15)",
         border: "1px solid rgba(168, 85, 247, 0.35)", borderRadius: "999px", padding: "4px",
         zIndex: 400, backdropFilter: "blur(6px)" }}>
@@ -134,12 +132,7 @@ export function FeaturePanels(props: FeaturePanelsProps) {
           { key: "mission", label: "Nhiệm vụ", icon: <Trophy size={14} />, on: () => setFeatureTab("mission") },
           { key: "leaderboard", label: "BXH", icon: <BarChart2 size={14} />, on: () => setFeatureTab("leaderboard") },
           { key: "queue", label: "Hàng chờ", icon: <Film size={14} />, on: () => setFeatureTab("queue") },
-          { key: "skip", label: "Bỏ qua", icon: <Scissors size={14} />, on: handleSkip },
-          { key: "character", label: "Ngoại hình", icon: <Palette size={14} />, on: () => setFeatureTab("character") },
-          { key: "donation", label: "Ủng hộ", icon: <Heart size={14} />, on: () => setFeatureTab("donation") },
-          { key: "image", label: "Chiếu ảnh", icon: <Image size={14} />, on: () => setFeatureTab("image") },
           { key: "invite", label: "Mời bạn", icon: <Share2 size={14} />, on: handleCopyInvite },
-          { key: "theme", label: "Rạp Trời", icon: <Globe size={14} />, on: () => handleTheme(currentTheme === "sky" ? "main" : "sky") },
         ].map(b => btn(b.key, b.label, b.icon, b.on))}
         {copyTooltip && <span style={{ fontSize: "10px", color: "#4ade80", marginLeft: "6px" }}>Đã sao chép link!</span>}
       </div>

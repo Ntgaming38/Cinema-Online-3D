@@ -36,7 +36,7 @@ export async function GET(
 
     const session = await getCurrentUserFromRequest(request);
     const isOwner = session?.userId === room.ownerId;
-    const isMember = room.members.some(m => m.userId === session?.userId);
+    const isMember = room.members.some((m: { userId: string }) => m.userId === session?.userId);
     const isPasswordProtected = Boolean(room.passwordHash);
 
     // Private rooms: non-members only learn that the room exists and is locked.
@@ -104,7 +104,7 @@ export async function PATCH(
     }
 
     const isOwner = room.ownerId === session.userId;
-    const isMod = room.members.some(m => m.role === "MODERATOR");
+    const isMod = room.members.some((m: { role: string }) => m.role === "MODERATOR");
 
     if (!isOwner && !isMod) {
       return NextResponse.json({ error: "Bạn không có quyền chỉnh sửa phòng này." }, { status: 403 });

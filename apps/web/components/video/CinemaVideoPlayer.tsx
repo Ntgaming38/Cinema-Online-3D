@@ -11,6 +11,8 @@ export interface CinemaVideoPlayerRef {
   pause: () => void;
   seekTo: (seconds: number) => void;
   getCurrentTime: () => number;
+  setVolume: (volume: number) => void;
+  setMuted: (muted: boolean) => void;
 }
 
 interface CinemaVideoPlayerProps {
@@ -20,6 +22,9 @@ interface CinemaVideoPlayerProps {
   canControl: boolean;
   onCommand: (action: "play" | "pause" | "seek", positionSec?: number) => void;
   onTitleDetected?: (title: string) => void;
+  onPlaybackError?: (message: string | null) => void;
+  volume?: number;
+  muted?: boolean;
 }
 
 function formatTime(seconds: number): string {
@@ -30,7 +35,7 @@ function formatTime(seconds: number): string {
 }
 
 export const CinemaVideoPlayer = forwardRef<CinemaVideoPlayerRef, CinemaVideoPlayerProps>(function CinemaVideoPlayer(
-  { sourceUrl, videoTitle, isPlaying, canControl, onCommand, onTitleDetected },
+  { sourceUrl, videoTitle, isPlaying, canControl, onCommand, onTitleDetected, onPlaybackError, volume = 70, muted = false },
   ref
 ) {
   const activePlayerRef = useRef<UnifiedPlayerRef>(null);
@@ -38,8 +43,30 @@ export const CinemaVideoPlayer = forwardRef<CinemaVideoPlayerRef, CinemaVideoPla
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(0);
+  const audioSettingsRef = useRef({ volume, muted });
 
   const parsedInfo: ParsedVideoInfo = parseVideoUrl(sourceUrl);
+
+  useEffect(() => {
+    if (!sourceUrl) onPlaybackError?.(null);
+    else if (!parsedInfo.embeddable) onPlaybackError?.(parsedInfo.errorMessage || "Đường dẫn video không được hỗ trợ.");
+    else onPlaybackError?.(errorMessage);
+  }, [sourceUrl, parsedInfo.embeddable, parsedInfo.errorMessage, errorMessage, onPlaybackError]);
+
+  useEffect(() => {
+    setErrorMessage(null);
+  }, [sourceUrl]);
+
+  useEffect(() => {
+    audioSettingsRef.current = { volume, muted };
+    activePlayerRef.current?.setVolume(volume);
+    activePlayerRef.current?.setMuted(muted);
+  }, [volume, muted]);
+
+  const applyAudioSettings = () => {
+    activePlayerRef.current?.setVolume(audioSettingsRef.current.volume);
+    activePlayerRef.current?.setMuted(audioSettingsRef.current.muted);
+  };
 
   // Poll current time and duration smoothly
   useEffect(() => {
@@ -68,7 +95,13 @@ export const CinemaVideoPlayer = forwardRef<CinemaVideoPlayerRef, CinemaVideoPla
     },
     getCurrentTime: () => {
       return activePlayerRef.current?.getCurrentTime() || 0;
-    }
+    },
+    setVolume: (nextVolume: number) => {
+      activePlayerRef.current?.setVolume(nextVolume);
+    },
+    setMuted: (nextMuted: boolean) => {
+      activePlayerRef.current?.setMuted(nextMuted);
+    },
   }));
 
   const handleStateChange = (playing: boolean, positionSec: number) => {
@@ -140,6 +173,7 @@ export const CinemaVideoPlayer = forwardRef<CinemaVideoPlayerRef, CinemaVideoPla
             onStateChange={handleStateChange}
             onSeek={handleUserSeek}
             onError={msg => setErrorMessage(msg)}
+            onReady={applyAudioSettings}
             onTitleLoaded={title => onTitleDetected?.(title)}
           />
         ) : parsedInfo.type === "hls" || parsedInfo.type === "mp4" || parsedInfo.type === "webm" || parsedInfo.type === "direct" ? (
@@ -155,6 +189,7 @@ export const CinemaVideoPlayer = forwardRef<CinemaVideoPlayerRef, CinemaVideoPla
               if (Number.isFinite(d) && d > 0) setDuration(d);
             }}
             onError={msg => setErrorMessage(msg)}
+            onReady={applyAudioSettings}
           />
         ) : (
           <div style={{ height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#f87171", gap: "8px", padding: "20px", textAlign: "center" }}>

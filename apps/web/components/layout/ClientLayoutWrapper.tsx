@@ -9,9 +9,10 @@ export default function ClientLayoutWrapper({
 }: Readonly<{ children: React.ReactNode }>) {
   const pathname = usePathname();
 
-  // Room pages render their own top bar + sidebar (see TheaterRoom);
-  // wrapping them in the global chrome would duplicate both.
-  if (pathname?.startsWith("/rooms/")) {
+  // The landing page and room pages provide their own chrome. Wrapping either
+  // would render a second header (and, on the landing page, an unrelated
+  // sidebar) above the intended cinema experience.
+  if (pathname === "/" || pathname?.startsWith("/rooms/")) {
     return <>{children}</>;
   }
 

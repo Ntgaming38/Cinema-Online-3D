@@ -13,6 +13,7 @@ export interface SeatOccupant {
 }
 
 export interface TheaterSceneProps {
+  viewMode?: "wide" | "audience";
   currentUserId?: string;
   selectedSeat?: string;
   occupiedSeats: Record<string, SeatOccupant>;
@@ -20,79 +21,9 @@ export interface TheaterSceneProps {
   theme?: string;
   recentReactions?: Array<{ id: string; emoji: string; userName: string; timestamp: number }>;
   onSelectSeat?: (seatLabel: string) => void;
-  /** Camera preset: panorama (high, whole room), wide (whole auditorium),
-   *  stage (close to the stage/screen), pov (from the viewer's own seat). */
-  viewMode?: ViewMode;
-  /** The HTML video overlay element; the scene projects the 3D screen's
-   *  corners onto it every frame so the video stays glued to the screen. */
-  screenOverlayRef?: React.RefObject<HTMLDivElement | null>;
-  /** Disco mode: mirror ball, sweeping laser beams and beat-synced flashes. */
-  disco?: boolean;
-  /** Render quality as device pixel ratio cap: 1 = smooth, 1.5 = sharp, 2 = ultra. */
-  quality?: number;
-}
-
-export type ViewMode = "panorama" | "wide" | "stage" | "pov";
-
-// The 3D cinema screen plane (must match the screen meshes in the scene).
-// The HTML video overlay is glued onto this plane by projecting its four
-// corners through the camera every frame — exact at any frame size and any
-// camera angle, unlike fixed CSS percentages.
-const SCREEN = { cx: 0, cy: 3.8, cz: -5.22, w: 9.81, h: 5.5 } as const;
-// Fixed layout size of the overlay element while projected; the perspective
-// transform scales it onto the screen quad.
-const OVERLAY_W = 1280;
-const OVERLAY_H = 720;
-
-// Seat label ("C9") → world position of that seat (same layout math as the
-// seat generator below: rows A–F, 16 seats in two blocks of 8).
-export function seatWorldPos(label: string): { x: number; y: number; z: number } | null {
-  const m = /^([A-F])(\d{1,2})$/.exec((label || "").trim().toUpperCase());
-  if (!m) return null;
-  const row = m[1].charCodeAt(0) - 65;
-  const col = parseInt(m[2], 10) - 1;
-  if (col < 0 || col > 15) return null;
-  const isLeft = col < 8;
-  const seatInBlock = col % 8;
-  const x = isLeft ? -6.2 + seatInBlock * 0.78 : 0.74 + seatInBlock * 0.78;
-  return { x, y: row * 0.16, z: -1.2 + row * 0.92 };
-}
-
-type Pt = { x: number; y: number };
-
-// Homography mapping the overlay's local corners onto the projected screen
-// quad, returned as a CSS matrix3d() array (column-major). Solves the 8x8
-// system with Gauss-Jordan elimination; null when degenerate.
-function homographyMatrix3d(src: Pt[], dst: Pt[]): number[] | null {
-  const A: number[][] = [];
-  const b: number[] = [];
-  for (let i = 0; i < 4; i++) {
-    const { x, y } = src[i];
-    const { x: X, y: Y } = dst[i];
-    A.push([x, y, 1, 0, 0, 0, -x * X, -y * X]);
-    b.push(X);
-    A.push([0, 0, 0, x, y, 1, -x * Y, -y * Y]);
-    b.push(Y);
-  }
-  for (let col = 0, row = 0; col < 8 && row < 8; col++, row++) {
-    let piv = row;
-    for (let r = row + 1; r < 8; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
-    if (Math.abs(A[piv][col]) < 1e-10) return null;
-    if (piv !== row) {
-      [A[row], A[piv]] = [A[piv], A[row]];
-      [b[row], b[piv]] = [b[piv], b[row]];
-    }
-    for (let r = 0; r < 8; r++) {
-      if (r === row) continue;
-      const f = A[r][col] / A[row][col];
-      if (f === 0) continue;
-      for (let c = col; c < 8; c++) A[r][c] -= f * A[row][c];
-      b[r] -= f * b[row];
-    }
-  }
-  const h = A.map((rowArr, i) => b[i] / rowArr[i]);
-  const [h11, h12, h13, h21, h22, h23, h31, h32] = h;
-  return [h11, h21, 0, h31, h12, h22, 0, h32, 0, 0, 1, 0, h13, h23, 0, 1];
+  quality?: "low" | "medium" | "high";
+  laserFlash?: boolean;
+  overlayElement?: HTMLDivElement | null;
 }
 
 // Wardrobe shirt colors are stored by Vietnamese name; the 3D viewer needs hex.
@@ -320,6 +251,12 @@ function CinemaSeat({ x, y, z, label, isMySeat, occupant, dummyViewerColor, onSe
         <cylinderGeometry args={[0.22, 0.22, 0.05, 12]} />
         <meshStandardMaterial color="#27232a" metalness={0.6} roughness={0.4} />
       </mesh>
+      {isMySeat && (
+        <mesh position={[0, 0.072, 0.04]} rotation={[-Math.PI / 2, 0, 0]}>
+          <ringGeometry args={[0.35, 0.43, 32]} />
+          <meshBasicMaterial color="#22d3ee" toneMapped={false} />
+        </mesh>
+      )}
       <RoundedBox position={[0, 0.28, 0]} args={[0.68, 0.24, 0.58]} radius={0.09} smoothness={4}>
         <meshStandardMaterial color={cushionColor} roughness={0.65} />
       </RoundedBox>
@@ -364,17 +301,19 @@ function CinemaSeat({ x, y, z, label, isMySeat, occupant, dummyViewerColor, onSe
       {occupant ? (
         <>
           <VoxelViewer shirtColor={isMySeat && !occupant.appearance?.shirtColor ? "#06b6d4" : shirtHex(occupant.appearance?.shirtColor)} />
-          <group position={[0, 1.62, 0]}>
+          <group position={[0, 0.8, 0.175]}>
             <Suspense fallback={null}>
               <Text
-                fontSize={0.16}
-                color={isMySeat ? "#67e8f9" : "#e9d5ff"}
+                fontSize={occupant.displayName.length > 8 ? 0.075 : 0.095}
+                maxWidth={0.34}
+                textAlign="center"
+                color={isMySeat ? "#ffd94d" : "#ffffff"}
                 anchorX="center"
                 anchorY="middle"
-                outlineWidth={0.03}
-                outlineColor="#090714"
+                outlineWidth={0.006}
+                outlineColor="#1a0b2e"
               >
-                {isMySeat ? `★ ${occupant.displayName} (Bạn)` : occupant.displayName}
+                {isMySeat ? `★ ${occupant.displayName}` : occupant.displayName}
               </Text>
             </Suspense>
           </group>
@@ -409,233 +348,117 @@ function FloatingEmojiParticle({ emoji, x, z, startTime }: { emoji: string; x: n
   );
 }
 
-// Fixed cinematic framing: from the back of the auditorium, tilted slightly up so
-// screen, stage/presenter, and seat rows all share ONE frame (like the mockup).
-// The camera never moves, and the room CSS keeps the stage frame at a constant
-// ~1.27 aspect (letterboxed), so the HTML video overlay stays glued to the 3D
-// screen at every window size, desktop or phone.
-// Camera presets. "wide" is pulled back and raised versus the original
-// framing so EVERY row — seat bases and the floor in front of the nearest
-// row included — stays inside the frame, while the screen still spans ~62%
-// of the frame width. "panorama" is the high overview (choigivui-style),
-// "stage" sits close in front of the stage, "pov" is computed from a seat.
-const CAM_PRESETS: Record<Exclude<ViewMode, "pov">, { pos: THREE.Vector3; tgt: THREE.Vector3 }> = {
-  panorama: { pos: new THREE.Vector3(0, 9.8, 13.5), tgt: new THREE.Vector3(0, 1.2, -1.2) },
-  wide: { pos: new THREE.Vector3(0, 5.2, 11.6), tgt: new THREE.Vector3(0, 2.0, -0.4) },
-  stage: { pos: new THREE.Vector3(0, 2.4, 2.6), tgt: new THREE.Vector3(0, 3.6, -5.2) },
-};
-
-function CameraRig({ viewMode, selectedSeat }: { viewMode: ViewMode; selectedSeat?: string }) {
-  const camera = useThree((s) => s.camera);
-  const lookTarget = useRef(new THREE.Vector3().copy(CAM_PRESETS.wide.tgt));
-  const initialized = useRef(false);
-  const tmpPos = useRef(new THREE.Vector3());
-  const tmpTgt = useRef(new THREE.Vector3());
-
-  useFrame((_, dt) => {
-    let pos: THREE.Vector3 = CAM_PRESETS.wide.pos;
-    let tgt: THREE.Vector3 = CAM_PRESETS.wide.tgt;
-    if (viewMode === "pov") {
-      // Audience view: sit in the viewer's own seat (fallback: F9, back row
-      // by the aisle) at head height, looking at the screen centre.
-      const seat = (selectedSeat ? seatWorldPos(selectedSeat) : null) || seatWorldPos("F9")!;
-      pos = tmpPos.current.set(seat.x, seat.y + 1.66, seat.z + 0.75);
-      tgt = tmpTgt.current.set(0, 3.5, SCREEN.cz);
-    } else if (viewMode !== "wide") {
-      pos = CAM_PRESETS[viewMode].pos;
-      tgt = CAM_PRESETS[viewMode].tgt;
-    }
-    if (!initialized.current) {
-      camera.position.copy(pos);
-      lookTarget.current.copy(tgt);
-      initialized.current = true;
-    } else {
-      const k = 1 - Math.exp(-3.2 * Math.min(dt, 0.05));
-      camera.position.lerp(pos, k);
-      lookTarget.current.lerp(tgt, k);
-    }
-    camera.lookAt(lookTarget.current);
-  });
-  return null;
-}
-
-// Projects the 3D screen's corners through the camera every frame and warps
-// the HTML video overlay onto them with a CSS perspective transform, so the
-// video is ALWAYS exactly on the screen — any window size, any camera view,
-// even mid-transition between views.
-function ScreenTracker({ overlayRef }: { overlayRef?: React.RefObject<HTMLDivElement | null> }) {
-  const camera = useThree((s) => s.camera);
-  const size = useThree((s) => s.size);
-  const scratch = useRef({
-    corner: new THREE.Vector3(),
-    view: new THREE.Vector3(),
-    src: [
-      { x: 0, y: 0 },
-      { x: OVERLAY_W, y: 0 },
-      { x: OVERLAY_W, y: OVERLAY_H },
-      { x: 0, y: OVERLAY_H },
-    ] as Pt[],
-  });
-
-  useFrame(() => {
-    const el = overlayRef?.current;
-    if (!el) return;
-    const hw = SCREEN.w / 2;
-    const hh = SCREEN.h / 2;
-    const world: Array<[number, number, number]> = [
-      [SCREEN.cx - hw, SCREEN.cy + hh, SCREEN.cz],
-      [SCREEN.cx + hw, SCREEN.cy + hh, SCREEN.cz],
-      [SCREEN.cx + hw, SCREEN.cy - hh, SCREEN.cz],
-      [SCREEN.cx - hw, SCREEN.cy - hh, SCREEN.cz],
-    ];
-    const dst: Pt[] = [];
-    for (const [x, y, z] of world) {
-      const c = scratch.current.corner.set(x, y, z);
-      // Behind (or too close to) the camera → the quad is meaningless; hide.
-      scratch.current.view.copy(c).applyMatrix4(camera.matrixWorldInverse);
-      if (scratch.current.view.z > -0.1) {
-        el.style.visibility = "hidden";
-        return;
-      }
-      c.project(camera);
-      if (c.z > 1) {
-        el.style.visibility = "hidden";
-        return;
-      }
-      dst.push({ x: (c.x * 0.5 + 0.5) * size.width, y: (0.5 - c.y * 0.5) * size.height });
-    }
-    const m = homographyMatrix3d(scratch.current.src, dst);
-    if (!m) {
-      el.style.visibility = "hidden";
-      return;
-    }
-    el.style.visibility = "visible";
-    el.style.transform = `matrix3d(${m.join(",")})`;
-    if (el.dataset.projected !== "1") el.dataset.projected = "1";
-  });
-  return null;
-}
-
-// Applies the user's sharpness choice (device pixel ratio cap) live.
-function QualityRig({ quality }: { quality: number }) {
-  const setDpr = useThree((s) => s.setDpr);
+// The video player is an HTML layer that sits over the 3D screen. Keep the
+// audience camera fixed so its perspective always matches that layer: looking
+// toward the screen cannot shift or skew the projected picture.
+function CameraRig({ viewMode, selectedSeat, overlayElement }: { viewMode: "wide" | "audience"; selectedSeat?: string; overlayElement?: HTMLDivElement | null }) {
+  const { camera, gl } = useThree();
+  const targetPosition = useRef(new THREE.Vector3());
+  const basePosition = useRef(new THREE.Vector3(0, 5.2, 11.6));
+  const targetLookAt = useRef(new THREE.Vector3());
+  const currentLookAt = useRef(new THREE.Vector3(0, 2, -0.4));
+  const zoomTarget = useRef(0.68);
+  const zoomCurrent = useRef(0.68);
+  const seatPose = useMemo(() => {
+    const label = selectedSeat || "F8";
+    const row = Math.max(0, "ABCDEF".indexOf(label[0] || "F"));
+    const col = Math.max(0, Number(label.slice(1)) - 1);
+    const half = col % 8;
+    const x = col < 8 ? -6.2 + half * 0.78 : 0.74 + half * 0.78;
+    const z = -1.2 + row * 0.92;
+    return { x, y: row * 0.16, z };
+  }, [selectedSeat]);
   useEffect(() => {
-    setDpr(quality);
-  }, [quality, setDpr]);
-  return null;
-}
-
-// Side walls with gold trim and spotlight fixtures, plus the truss bar the
-// disco ball hangs from. Very dark in normal mode (depth at the room's
-// edges); the disco rig brings them to life.
-function RoomShell() {
-  const stripZ = [-5.4, -3.1, -0.8, 1.5, 3.8];
-  const spotZ = [-4, -0.5, 3];
-  return (
-    <group>
-      {([-1, 1] as const).map((side) => (
-        <group key={side}>
-          <mesh position={[side * 7.7, 4.3, -0.5]}>
-            <boxGeometry args={[0.3, 8.6, 15]} />
-            <meshStandardMaterial color="#0b0817" roughness={0.95} />
-          </mesh>
-          {stripZ.map((z) => (
-            <mesh key={z} position={[side * 7.52, 4.3, z]}>
-              <boxGeometry args={[0.06, 8.6, 0.07]} />
-              <meshStandardMaterial color="#8a6d1f" metalness={0.8} roughness={0.35} emissive="#2a1f05" />
-            </mesh>
-          ))}
-          {spotZ.map((z) => (
-            <mesh key={z} position={[side * 7.45, 5.6, z]} rotation={[0, 0, side * 0.7]}>
-              <cylinderGeometry args={[0.09, 0.14, 0.34, 10]} />
-              <meshStandardMaterial color="#17131f" metalness={0.6} roughness={0.4} />
-            </mesh>
-          ))}
-        </group>
-      ))}
-      <mesh position={[0, 8.2, -0.6]}>
-        <boxGeometry args={[15.4, 0.18, 0.3]} />
-        <meshStandardMaterial color="#17131f" metalness={0.6} roughness={0.45} />
-      </mesh>
-    </group>
-  );
-}
-
-const DISCO_COLORS = ["#f472b6", "#22d3ee", "#a3e635", "#c084fc", "#fbbf24", "#fb7185", "#34d399", "#60a5fa"];
-const DISCO_BPM = 137;
-
-// Disco mode: spinning mirror ball, eight sweeping laser beams, wall spot
-// cones and two flash lights alternating on the beat (137 BPM, like the
-// reference site). Rendered only while disco is on.
-function DiscoRig() {
-  const spinRef = useRef<THREE.Group>(null);
-  const ballRef = useRef<THREE.Mesh>(null);
-  const beamRefs = useRef<Array<THREE.Group | null>>([]);
-  const flashL = useRef<THREE.PointLight>(null);
-  const flashR = useRef<THREE.PointLight>(null);
-
-  useFrame(({ clock }) => {
-    const t = clock.elapsedTime;
-    if (spinRef.current) spinRef.current.rotation.y = -t * 0.55;
-    if (ballRef.current) ballRef.current.rotation.y = t * 0.8;
-    beamRefs.current.forEach((g, i) => {
-      if (g) g.rotation.x = 0.95 + Math.sin(t * 1.4 + i * 1.7) * 0.38;
-    });
-    const beat = t * (DISCO_BPM / 60);
-    if (flashL.current) flashL.current.intensity = 3 + 34 * Math.pow(1 - (beat % 1), 2);
-    if (flashR.current) flashR.current.intensity = 3 + 34 * Math.pow(1 - ((beat + 0.5) % 1), 2);
+    const defaultZoom = viewMode === "wide" ? 0.68 : 1;
+    zoomTarget.current = defaultZoom;
+    zoomCurrent.current = defaultZoom;
+    if (viewMode === "audience") {
+      // Place the POV just behind the selected seat and aim slightly below
+      // the screen center. This keeps the picture aligned with the wall while
+      // leaving the stage performers visible beneath it.
+      targetPosition.current.set(seatPose.x, seatPose.y + 1.72, seatPose.z + 3.2);
+      targetLookAt.current.set(0, 2.35, -5.22);
+    } else {
+      // Back-of-house wide view: include the screen and all six audience rows.
+      targetPosition.current.set(0, 7.6, 16.8);
+      targetLookAt.current.set(0, 2.1, -0.6);
+    }
+  }, [camera, viewMode, seatPose]);
+  useEffect(() => {
+    const frame = overlayElement?.parentElement ?? gl.domElement.parentElement;
+    if (!frame) return;
+    let previousPinchDistance = 0;
+    const clampZoom = (value: number) => Math.max(0.45, Math.min(1.7, value));
+    const distance = (touches: TouchList) => Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      zoomTarget.current = clampZoom(zoomTarget.current * (event.deltaY < 0 ? 0.9 : 1.11));
+    };
+    const onTouchStart = (event: TouchEvent) => {
+      previousPinchDistance = event.touches.length >= 2 ? distance(event.touches) : 0;
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      if (event.touches.length < 2) { previousPinchDistance = 0; return; }
+      event.preventDefault();
+      const nextDistance = distance(event.touches);
+      if (previousPinchDistance > 0 && nextDistance > 0) zoomTarget.current = clampZoom(zoomTarget.current / (nextDistance / previousPinchDistance));
+      previousPinchDistance = nextDistance;
+    };
+    const onTouchEnd = (event: TouchEvent) => {
+      previousPinchDistance = event.touches.length >= 2 ? distance(event.touches) : 0;
+    };
+    frame.addEventListener("wheel", onWheel, { passive: false });
+    frame.addEventListener("touchstart", onTouchStart, { passive: true });
+    frame.addEventListener("touchmove", onTouchMove, { passive: false });
+    frame.addEventListener("touchend", onTouchEnd, { passive: true });
+    frame.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    return () => {
+      frame.removeEventListener("wheel", onWheel);
+      frame.removeEventListener("touchstart", onTouchStart);
+      frame.removeEventListener("touchmove", onTouchMove);
+      frame.removeEventListener("touchend", onTouchEnd);
+      frame.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, [gl, overlayElement]);
+  useFrame((_, delta) => {
+    const k = 1 - Math.exp(-3.2 * delta);
+    basePosition.current.lerp(targetPosition.current, k);
+    currentLookAt.current.lerp(targetLookAt.current, k);
+    zoomCurrent.current += (zoomTarget.current - zoomCurrent.current) * (1 - Math.exp(-5 * delta));
+    camera.position.copy(currentLookAt.current).addScaledVector(basePosition.current.clone().sub(currentLookAt.current), zoomCurrent.current);
+    camera.lookAt(currentLookAt.current);
+    if (overlayElement) {
+      const corners = [
+        new THREE.Vector3(-4.905, 6.55, -5.22), new THREE.Vector3(4.905, 6.55, -5.22),
+        new THREE.Vector3(4.905, 1.05, -5.22), new THREE.Vector3(-4.905, 1.05, -5.22),
+      ];
+      const projected = corners.map((point) => point.project(camera));
+      const visible = projected.every((point) => point.z < 1 && point.z > -1);
+      if (visible) {
+        // CSS transform coordinates are local to the frame containing both
+        // the canvas and overlay. Including viewport offsets here moves the
+        // projected video away from its 3D screen (especially in POV mode).
+        const canvasRect = gl.domElement.getBoundingClientRect();
+        const frameRect = overlayElement.parentElement?.getBoundingClientRect() ?? canvasRect;
+        const p = projected.map((point) => ({
+          x: canvasRect.left + (point.x + 1) * canvasRect.width / 2 - frameRect.left,
+          y: canvasRect.top + (1 - point.y) * canvasRect.height / 2 - frameRect.top,
+        }));
+        const w = 1280, h = 720;
+        const src = [[0,0],[w,0],[w,h],[0,h]];
+        const a: number[][] = [];
+        for (let i=0;i<4;i++) { const [x,y]=src[i]; const {x:u,y:v}=p[i]; a.push([x,y,1,0,0,0,-u*x,-u*y,u],[0,0,0,x,y,1,-v*x,-v*y,v]); }
+        for(let i=0;i<8;i++){ let pivot=i; for(let j=i+1;j<8;j++) if(Math.abs(a[j][i])>Math.abs(a[pivot][i])) pivot=j; [a[i],a[pivot]]=[a[pivot],a[i]]; const d=a[i][i]; if (Math.abs(d) < 1e-10) { overlayElement.style.visibility="hidden"; return; } for(let k=i;k<9;k++) a[i][k]/=d; for(let j=0;j<8;j++) if(j!==i){const f=a[j][i];for(let k=i;k<9;k++)a[j][k]-=f*a[i][k];} }
+        const [h0,h1,h2,h3,h4,h5,h6,h7]=a.map(row=>row[8]);
+        overlayElement.style.width=`${w}px`; overlayElement.style.height=`${h}px`; overlayElement.style.left="0"; overlayElement.style.top="0"; overlayElement.style.transformOrigin="0 0"; overlayElement.style.transform=`matrix3d(${h0},${h3},0,${h6},${h1},${h4},0,${h7},0,0,1,0,${h2},${h5},0,1)`; overlayElement.style.visibility="visible";
+      } else overlayElement.style.visibility="hidden";
+    }
   });
-
-  return (
-    <group>
-      {/* Mirror ball on its mount rod under the truss */}
-      <mesh position={[0, 7.9, -0.6]}>
-        <cylinderGeometry args={[0.03, 0.03, 0.6, 6]} />
-        <meshStandardMaterial color="#17131f" metalness={0.6} roughness={0.4} />
-      </mesh>
-      <mesh ref={ballRef} position={[0, 7.35, -0.6]}>
-        <sphereGeometry args={[0.36, 24, 18]} />
-        <meshStandardMaterial color="#d7daea" metalness={0.85} roughness={0.3} emissive="#23233a" flatShading />
-      </mesh>
-
-      {/* Laser beams sweeping from the ball */}
-      <group ref={spinRef} position={[0, 7.35, -0.6]}>
-        {DISCO_COLORS.map((color, i) => (
-          <group key={color} rotation={[0, (i * Math.PI) / 4, 0]}>
-            <group ref={(g) => { beamRefs.current[i] = g; }}>
-              <mesh position={[0, 0, 6.5]} rotation={[Math.PI / 2, 0, 0]}>
-                <cylinderGeometry args={[0.2, 0.02, 13, 6, 1, true]} />
-                <meshBasicMaterial color={color} transparent opacity={0.32} blending={THREE.AdditiveBlending} depthWrite={false} side={THREE.DoubleSide} />
-              </mesh>
-            </group>
-          </group>
-        ))}
-      </group>
-
-      {/* Wall spotlight cones */}
-      {([-1, 1] as const).map((side) =>
-        [-4, -0.5, 3].map((z, i) => (
-          <group key={`${side}-${z}`} position={[side * 7.45, 5.6, z]}>
-            <group rotation={[0, side * -Math.PI / 2, 0]}>
-              <group rotation={[0.55, 0, 0]}>
-                <mesh position={[0, 0, 4.5]} rotation={[Math.PI / 2, 0, 0]}>
-                  <cylinderGeometry args={[1.6, 0.12, 9, 12, 1, true]} />
-                  <meshBasicMaterial color={DISCO_COLORS[(i + (side > 0 ? 3 : 0)) % DISCO_COLORS.length]} transparent opacity={0.1} blending={THREE.AdditiveBlending} depthWrite={false} side={THREE.DoubleSide} />
-                </mesh>
-              </group>
-            </group>
-          </group>
-        ))
-      )}
-
-      {/* Beat flashes */}
-      <pointLight ref={flashL} position={[-4.5, 5.4, 0.5]} color="#ff2fb3" distance={20} />
-      <pointLight ref={flashR} position={[4.5, 5.4, 0.5]} color="#22d3ee" distance={20} />
-    </group>
-  );
+  return null;
 }
 
 export function TheaterScene({
+  viewMode = "wide",
   currentUserId,
   selectedSeat,
   occupiedSeats,
@@ -643,25 +466,15 @@ export function TheaterScene({
   theme = "main",
   recentReactions = [],
   onSelectSeat,
-  viewMode = "wide",
-  screenOverlayRef,
-  disco = false,
-  quality = 1.5
+  quality = "high",
+  laserFlash = false
+  , overlayElement
 }: TheaterSceneProps) {
   const isSky = theme === "sky";
-  // Ambient crowd wears soft pastel shirts, like the choigivui audience
-  const viewerColors = [
-    "#a7f3d0", "#bfdbfe", "#ddd6fe", "#fbcfe8", "#fef3c7",
-    "#fef08a", "#bbf7d0", "#fed7aa", "#c7d2fe", "#f5d0fe",
-    "#a5f3fc", "#e7e5e4", "#fecdd3", "#d9f99d"
-  ];
-
   const rowLabels = ["A", "B", "C", "D", "E", "F"];
   const seatsPerRow = 16;
   const seats = useMemo(() => {
     const list: React.ReactNode[] = [];
-    let colorIdx = 0;
-
     for (let row = 0; row < rowLabels.length; row++) {
       const stepY = row * 0.16;
       const stepZ = -1.2 + row * 0.92;
@@ -676,10 +489,6 @@ export function TheaterScene({
         const isMySeat = selectedSeat === label;
         const occupant = occupiedSeats[label];
 
-        // Fill ~60% of remaining seats with ambient viewers for rich cinema atmosphere
-        const hasDummyViewer = !occupant && (row + col) % 3 !== 0;
-        const dummyColor = hasDummyViewer ? viewerColors[(colorIdx++) % viewerColors.length] : undefined;
-
         list.push(
           <CinemaSeat
             key={label}
@@ -689,7 +498,6 @@ export function TheaterScene({
             label={label}
             isMySeat={isMySeat}
             occupant={occupant}
-            dummyViewerColor={dummyColor}
             onSelect={(l) => onSelectSeat?.(l)}
           />
         );
@@ -701,24 +509,19 @@ export function TheaterScene({
   return (
     <Canvas
       camera={{ position: [0, 5.2, 11.6], fov: 46 }}
-      dpr={[1, 1.5]}
+      dpr={quality === "low" ? 0.75 : quality === "medium" ? 1 : 1.5}
       gl={{ antialias: true, alpha: false }}
     >
       <color attach="background" args={[isSky ? "#0a1233" : "#080612"]} />
-      <CameraRig viewMode={viewMode} selectedSeat={selectedSeat} />
-      <ScreenTracker overlayRef={screenOverlayRef} />
-      <QualityRig quality={quality} />
+      <CameraRig viewMode={viewMode} selectedSeat={selectedSeat} overlayElement={overlayElement} />
       {isSky && <Stars radius={70} depth={35} count={2600} factor={3.2} saturation={0} fade speed={0.6} />}
 
       {/* Lighting */}
-      <ambientLight intensity={disco ? 0.22 : isPlaying ? 0.35 : 0.75} />
+      <ambientLight intensity={isPlaying ? 0.35 : 0.75} />
       <pointLight position={[0, 4.5, -4]} intensity={isPlaying ? 45 : 25} color="#c084fc" distance={20} />
       <pointLight position={[-6, 3, 0]} intensity={18} color="#f59e0b" distance={12} />
       <pointLight position={[6, 3, 0]} intensity={18} color="#f59e0b" distance={12} />
-
-      {/* Room walls, spot fixtures, disco truss */}
-      <RoomShell />
-      {disco && <DiscoRig />}
+      {laserFlash && <><pointLight position={[-5, 6.4, -2]} color="#22d3ee" intensity={34} distance={16} /><pointLight position={[5, 6.4, -2]} color="#e879f9" intensity={34} distance={16} /></>}
 
       {/* Stage Floor */}
       <mesh position={[0, -0.05, -3.4]}>
@@ -752,29 +555,53 @@ export function TheaterScene({
             </mesh>
             <mesh position={[0, rowY + 0.012, aisleZ]}>
               <boxGeometry args={[0.82, 0.024, 0.9]} />
-              <meshBasicMaterial color="#7c3aed" />
+              <meshBasicMaterial color="#c49a38" />
             </mesh>
             <mesh position={[-0.43, rowY + 0.02, aisleZ]}>
               <boxGeometry args={[0.035, 0.03, 0.9]} />
-              <meshBasicMaterial color="#c084fc" />
+              <meshBasicMaterial color="#f4d477" />
             </mesh>
             <mesh position={[0.43, rowY + 0.02, aisleZ]}>
               <boxGeometry args={[0.035, 0.03, 0.9]} />
-              <meshBasicMaterial color="#c084fc" />
+              <meshBasicMaterial color="#f4d477" />
             </mesh>
             {/* Glowing step bar across the aisle at each tier lip */}
             <mesh position={[0, rowY + 0.028, aisleZ + 0.42]}>
               <boxGeometry args={[0.68, 0.028, 0.09]} />
-              <meshBasicMaterial color="#e9d5ff" />
+              <meshBasicMaterial color="#f4d477" />
             </mesh>
           </group>
         );
       })}
 
-      {/* Cinema Screen Frame Backing */}
-      <mesh position={[0, 3.8, -5.4]}>
-        <boxGeometry args={[11.3, 6.4, 0.3]} />
-        <meshStandardMaterial color="#0c0916" roughness={0.6} />
+      {/* Rear wall and wall-mounted cinema screen. The player is aligned with
+          this fixed frame by the locked audience camera above. */}
+      <mesh position={[0, 3.35, -5.78]}>
+        <boxGeometry args={[14, 7.6, 0.35]} />
+        <meshStandardMaterial color="#100c1d" roughness={0.92} />
+      </mesh>
+      {/* A compact wall-mounted bezel: four solid 3D rails sit around the
+          projection plane. This makes the screen read as hardware attached to
+          the back wall rather than a floating HTML rectangle. */}
+      <mesh position={[0, 3.8, -5.42]}>
+        <boxGeometry args={[10.42, 6.12, 0.42]} />
+        <meshStandardMaterial color="#090710" metalness={0.48} roughness={0.42} />
+      </mesh>
+      <mesh position={[0, 6.77, -5.185]}>
+        <boxGeometry args={[10.32, 0.16, 0.12]} />
+        <meshStandardMaterial color="#08090d" metalness={0.48} roughness={0.42} emissive="#020204" emissiveIntensity={0.08} />
+      </mesh>
+      <mesh position={[0, 0.83, -5.185]}>
+        <boxGeometry args={[10.32, 0.16, 0.12]} />
+        <meshStandardMaterial color="#08090d" metalness={0.48} roughness={0.42} emissive="#020204" emissiveIntensity={0.08} />
+      </mesh>
+      <mesh position={[-5.08, 3.8, -5.185]}>
+        <boxGeometry args={[0.16, 5.78, 0.12]} />
+        <meshStandardMaterial color="#08090d" metalness={0.48} roughness={0.42} emissive="#020204" emissiveIntensity={0.08} />
+      </mesh>
+      <mesh position={[5.08, 3.8, -5.185]}>
+        <boxGeometry args={[0.16, 5.78, 0.12]} />
+        <meshStandardMaterial color="#08090d" metalness={0.48} roughness={0.42} emissive="#020204" emissiveIntensity={0.08} />
       </mesh>
 
       {/* Inner screen surface (16:9) — the HTML video player overlays exactly here */}

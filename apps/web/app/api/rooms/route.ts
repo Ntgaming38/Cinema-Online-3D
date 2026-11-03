@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserFromRequest, hashPassword, signAuthToken, AUTH_COOKIE_NAME } from "@/lib/auth";
@@ -134,7 +135,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 4. Create Room Transaction
-    const room = await prisma.$transaction(async (tx) => {
+    const room = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const createdRoom = await tx.room.create({
         data: {
           code,

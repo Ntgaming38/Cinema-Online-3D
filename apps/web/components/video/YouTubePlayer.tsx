@@ -15,6 +15,8 @@ export interface UnifiedPlayerRef {
   seekTo: (seconds: number) => void;
   getCurrentTime: () => number;
   getDuration: () => number;
+  setVolume: (volume: number) => void;
+  setMuted: (muted: boolean) => void;
 }
 
 interface YouTubePlayerProps {
@@ -242,7 +244,15 @@ export const YouTubePlayer = forwardRef<UnifiedPlayerRef, YouTubePlayerProps>(fu
         return playerRef.current.getDuration();
       }
       return 0;
-    }
+    },
+    setVolume: (volume: number) => {
+      playerRef.current?.setVolume?.(Math.max(0, Math.min(100, volume)));
+    },
+    setMuted: (muted: boolean) => {
+      if (!playerRef.current) return;
+      if (muted) playerRef.current.mute?.();
+      else playerRef.current.unMute?.();
+    },
   }));
 
   return (

@@ -31,10 +31,14 @@ import {
   Check,
   X,
   Layers,
-  Sparkles
+  Sparkles,
+  Copy,
+  Gauge,
+  Volume2,
+  VolumeX
 } from "lucide-react";
 import { CinemaVideoPlayer, CinemaVideoPlayerRef } from "@/components/video/CinemaVideoPlayer";
-import { TheaterScene, SeatOccupant, ViewMode } from "@/components/theater/TheaterScene";
+import { TheaterScene, SeatOccupant } from "@/components/theater/TheaterScene";
 import { parseVideoUrl } from "@/lib/video-parser";
 import { FeaturePanels } from "@/components/features/FeaturePanels";
 
@@ -67,27 +71,8 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   const router = useRouter();
   const socketRef = useRef<Socket | null>(null);
   const playerRef = useRef<CinemaVideoPlayerRef>(null);
-  // Camera view: panorama / wide / stage / pov (from the viewer's seat).
-  const [viewMode, setViewMode] = useState<ViewMode>("wide");
-  // Disco mode (room-synced via socket): laser beams + beat flashes.
-  const [discoMode, setDiscoMode] = useState(false);
-  // Render sharpness (device pixel ratio cap), remembered per device.
-  const [quality, setQuality] = useState<number>(() => {
-    try {
-      const q = Number(localStorage.getItem("cinema-quality"));
-      return [1, 1.5, 2].includes(q) ? q : 1.5;
-    } catch {
-      return 1.5;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem("cinema-quality", String(quality));
-    } catch {}
-  }, [quality]);
-  // The 3D scene projects the screen's corners onto this element every frame.
-  const screenOverlayRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const screenOverlayRef = useRef<HTMLDivElement>(null);
 
   // User State
   const [currentUser, setCurrentUser] = useState<{ id: string; displayName: string; avatarUrl?: string; isGuest?: boolean; balance?: number; totalDonated?: number } | null>(null);
@@ -108,7 +93,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   const [userRole, setUserRole] = useState<"OWNER" | "MODERATOR" | "MEMBER">("MEMBER");
   const [allowMemberControl, setAllowMemberControl] = useState(false);
 
-  const [sourceUrl, setSourceUrl] = useState("https://www.youtube.com/watch?v=XJJ92B5adyg");
+  const [sourceUrl, setSourceUrl] = useState("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
   const [videoTitle, setVideoTitle] = useState("One Piece Film: Red");
   const [isPlaying, setIsPlaying] = useState(false);
 
@@ -122,9 +107,18 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
   // UI States
   const [mySeat, setMySeat] = useState<string | undefined>();
-  const [showChatPanel, setShowChatPanel] = useState(true);
-  const [showRoomInfo, setShowRoomInfo] = useState(true);
+  const [viewMode, setViewMode] = useState<"wide" | "audience">("wide");
+  const [showChatPanel, setShowChatPanel] = useState(false);
+  const [showRoomInfo, setShowRoomInfo] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const [toolRailCollapsed, setToolRailCollapsed] = useState(false);
+  const [showRoomHint, setShowRoomHint] = useState(false);
+  const [sceneQuality, setSceneQuality] = useState<"auto" | "low" | "medium" | "high">("auto");
+  const [effectiveSceneQuality, setEffectiveSceneQuality] = useState<"low" | "medium" | "high">("medium");
+  const [videoError, setVideoError] = useState<string | null>(null);
+  const [audioVolume, setAudioVolume] = useState(70);
+  const [audioMuted, setAudioMuted] = useState(false);
   // ==================== NEW FEATURES STATE ====================
   const [featureTab, setFeatureTab] = useState<"mission" | "leaderboard" | "queue" | "character" | "donation" | "image" | "theme" | null>(null);
   const [missions, setMissions] = useState<Array<{ key: string; label: string; exp: number; progress: number; target: number; completed: boolean; claimed: boolean }>>([]);
@@ -138,6 +132,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   const [donationInput, setDonationInput] = useState("");
   const [projectedImage, setProjectedImage] = useState<{ url: string; setByName: string } | null>(null);
   const [roomTheme, setRoomTheme] = useState("main");
+  const [laserFlash, setLaserFlash] = useState(false);
   const [userAppearance, setUserAppearance] = useState<{ shirtColor?: string; hairStyle?: string; accessory?: string }>({});
 
   const [appNotice, setAppNotice] = useState<string | null>(null);
@@ -146,6 +141,38 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   const [newTitleInput, setNewTitleInput] = useState("");
   const [isChangingVideo, setIsChangingVideo] = useState(false);
   const [appAlert, setAppAlert] = useState<string | null>(null);
+
+  useEffect(() => {
+    try {
+      setShowRoomHint(window.localStorage.getItem("cinema-room-hint-dismissed") !== "1");
+    } catch {
+      setShowRoomHint(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (sceneQuality !== "auto") {
+      setEffectiveSceneQuality(sceneQuality);
+      return;
+    }
+    const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 4;
+    const cores = navigator.hardwareConcurrency || 4;
+    const isMobile = window.matchMedia("(max-width: 680px)").matches || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+    setEffectiveSceneQuality(isMobile || memory <= 4 || cores <= 4 ? "low" : memory >= 8 && cores >= 8 ? "high" : "medium");
+  }, [sceneQuality]);
+
+  useEffect(() => {
+    if (!focusMode) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFocusMode(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [focusMode]);
+
+  useEffect(() => {
+    setVideoError(null);
+  }, [sourceUrl]);
 
   // 1. Initial Authentication & Load Room Details
   useEffect(() => {
@@ -393,10 +420,6 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
       setRoomTheme(data.theme);
     });
 
-    socket.on("room:disco:changed", (data: { disco: boolean }) => {
-      setDiscoMode(!!data.disco);
-    });
-
     socket.on("image:projected", (data: { url: string; setByName: string }) => {
       setProjectedImage({ url: data.url, setByName: data.setByName });
     });
@@ -590,7 +613,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   }
 
   return (
-    <div className="cinema-app-shell room-app-shell">
+    <div className={`cinema-app-shell room-app-shell${focusMode ? " focus-mode" : ""}`}>
       {/* Floating Reactions Overlay */}
       <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 9999, overflow: "hidden" }}>
         {floatingReactions.map((rx) => (
@@ -685,6 +708,34 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
         </div>
       </header>
 
+      <div className="room-top-controls">
+        <label className="room-quality-control" title={`Chất lượng đồ họa đang dùng: ${effectiveSceneQuality}`}>
+          <Gauge size={15} />
+          <span>Độ nét</span>
+          <select aria-label="Chất lượng đồ họa" value={sceneQuality} onChange={(event) => setSceneQuality(event.target.value as typeof sceneQuality)}>
+            <option value="auto">Tự động</option>
+            <option value="low">Tiết kiệm</option>
+            <option value="medium">Cân bằng</option>
+            <option value="high">Cao</option>
+          </select>
+        </label>
+        <button type="button" className="room-top-control-button" onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(window.location.href);
+            setAppNotice("Đã sao chép link mời vào phòng");
+            window.setTimeout(() => setAppNotice(null), 2400);
+          } catch {
+            setAppAlert("Không thể sao chép link. Hãy sao chép địa chỉ trên thanh trình duyệt.");
+            window.setTimeout(() => setAppAlert(null), 3000);
+          }
+        }}><Copy size={15} /> Mời bạn</button>
+        <button type="button" className="room-top-control-button" onClick={() => { setFocusMode(true); setShowChatPanel(true); }}><Maximize size={15} /> Tập trung</button>
+        <button type="button" title="Rời rạp" aria-label="Rời rạp" className="room-top-control-button room-leave-button" onClick={() => router.push("/")}>
+          <LogOut size={13} /> Rời rạp
+        </button>
+      </div>
+      {focusMode && <button type="button" className="room-focus-exit" onClick={() => setFocusMode(false)}><Minimize size={14} /> Thoát tập trung <kbd>Esc</kbd></button>}
+
       {/* 2. BODY LAYOUT: LEFT SIDEBAR + CENTER THEATER + RIGHT CHAT */}
       <div className="room-layout">
         {/* LEFT FLOATING SIDEBAR */}
@@ -751,6 +802,9 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
               <div className="room-movie-copy">
                 <div className="room-movie-heading">
+                  <span className={`room-playback-status${videoError ? " is-error" : isPlaying ? " is-playing" : ""}`} title={videoError || undefined}>
+                    <i /> {videoError ? "Video gặp lỗi" : isPlaying ? "Đang chiếu" : "Tạm dừng"}
+                  </span>
                   <h1>{videoTitle}</h1>
                 </div>
                 <div className="room-movie-meta">
@@ -767,14 +821,11 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
               <div className="room-viewer-pill">
                 <Users size={14} /> <b>{onlineCount}</b> người đang xem
               </div>
-              <button
-                type="button"
-                onClick={() => router.push("/")}
-                className="room-leave-button"
-              >
-                <LogOut size={13} /> Rời rạp
-              </button>
             </div>
+            <button type="button" className="room-overlay-vote" onClick={() => socketRef.current?.emit("vote:skip")}>
+              <Play size={13} /> Bỏ qua <b>{skipVote.votes}/{skipVote.total || onlineCount}</b>
+              <small>{Math.round(skipVote.ratio * 100)}% · đủ 35% sẽ chuyển video</small>
+            </button>
           </div>
 
           {/* STAGE & AUDITORIUM VIEWPORT */}
@@ -805,27 +856,51 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
               </div>
             )}
 
+            <nav className={`room-tool-rail${toolRailCollapsed ? " is-collapsed" : ""}`} aria-label="Công cụ phòng chiếu">
+              <button className="room-tool-rail-toggle" type="button" aria-label={toolRailCollapsed ? "Mở công cụ" : "Thu gọn công cụ"} onClick={() => setToolRailCollapsed((collapsed) => !collapsed)}>
+                <ChevronDown size={16} />
+              </button>
+              <button type="button" title="Gửi video vào rạp" onClick={() => setShowChangeVideoModal(true)}><Tv size={17} /><span>Gửi video</span></button>
+              <button type="button" title="Chiếu ảnh lên màn hình" onClick={() => setFeatureTab("image")}><Layers size={17} /><span>Chiếu ảnh</span></button>
+              <button type="button" title="Mở hàng chờ video" onClick={() => setFeatureTab("queue")}><Film size={17} /><span>Hàng chờ</span></button>
+              <button type="button" title="Bình chọn bỏ qua video" onClick={() => socketRef.current?.emit("vote:skip")}><Play size={17} /><span>Bỏ qua</span></button>
+              <button type="button" title="Mở trò chuyện" onClick={() => setShowChatPanel((open) => !open)}><MessageSquare size={17} /><span>Trò chuyện</span></button>
+              <button type="button" title="Tùy chỉnh nhân vật" onClick={() => setFeatureTab("character")}><Sparkles size={17} /><span>Tủ đồ</span></button>
+              <button type="button" title="Ủng hộ người tạo" onClick={() => setFeatureTab("donation")}><Crown size={17} /><span>Ủng hộ</span></button>
+              <button type="button" title="Đổi chủ đề rạp" onClick={() => setRoomTheme((theme) => theme === "sky" ? "main" : "sky")}><Globe size={17} /><span>Rạp trời</span></button>
+              <button type="button" title="Xem thông tin rạp" onClick={() => setShowRoomInfo((visible) => !visible)}><Users size={17} /><span>Thông tin rạp</span></button>
+            </nav>
 
+            {mySeat && <div className="room-seat-indicator"><span /> Ghế của bạn: <b>{mySeat}</b><small>Bấm ghế khác để đổi chỗ</small></div>}
+            {showRoomHint && (
+              <aside className="room-gesture-hint" role="note">
+                <b>Điều khiển phòng</b>
+                <span>Lăn chuột hoặc vuốt hai ngón để thu phóng · Bấm ghế để chọn chỗ · mở Chat để trò chuyện</span>
+                <button type="button" onClick={() => {
+                  setShowRoomHint(false);
+                  try { window.localStorage.setItem("cinema-room-hint-dismissed", "1"); } catch { /* Ignore private browsing storage restrictions. */ }
+                }}>Đã hiểu</button>
+              </aside>
+            )}
             {/* UNIFIED STAGE FRAME — screen, stage, presenter, seats and audience
                 all live in ONE 3D frame, exactly like the reference mockup
                 (no more split "screen frame" / "auditorium frame"). */}
             <div className="room-stage-frame">
               <TheaterScene
+                viewMode={viewMode}
+                overlayElement={screenOverlayRef.current}
                 currentUserId={currentUser?.id}
                 selectedSeat={mySeat}
                 occupiedSeats={occupiedSeatsMap}
                 isPlaying={isPlaying}
+                quality={effectiveSceneQuality}
                 theme={roomTheme}
                 recentReactions={sceneReactions}
                 onSelectSeat={handleSelectSeat}
-                viewMode={viewMode}
-                screenOverlayRef={screenOverlayRef}
-                disco={discoMode}
-                quality={quality}
               />
 
               {/* Video player overlaid exactly onto the 3D cinema screen */}
-              <div className="room-screen-overlay" ref={screenOverlayRef}>
+              <div ref={screenOverlayRef} className="room-screen-overlay">
                 <CinemaVideoPlayer
                   ref={playerRef}
                   sourceUrl={sourceUrl}
@@ -834,6 +909,9 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                   canControl={canControl}
                   onCommand={handlePlaybackCommand}
                   onTitleDetected={(t) => setVideoTitle(t)}
+                  onPlaybackError={setVideoError}
+                  volume={audioVolume}
+                  muted={audioMuted}
                 />
                 {projectedImage && (
                   <div style={{ position: "absolute", inset: 0, zIndex: 30, background: "rgba(0,0,0,.9)", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -845,8 +923,42 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
               {/* Floating Bottom Action Capsule */}
               <div className="room-action-bar">
+                <div className="room-audio-controls" aria-label="Điều khiển âm thanh video">
+                  <button
+                    type="button"
+                    aria-label={audioMuted || audioVolume === 0 ? "Bật tiếng" : "Tắt tiếng"}
+                    title={audioMuted || audioVolume === 0 ? "Bật tiếng" : "Tắt tiếng"}
+                    onClick={() => {
+                      if (audioMuted || audioVolume === 0) {
+                        if (audioVolume === 0) setAudioVolume(70);
+                        setAudioMuted(false);
+                      } else setAudioMuted(true);
+                    }}
+                  >
+                    {audioMuted || audioVolume === 0 ? <VolumeX size={17} /> : <Volume2 size={17} />}
+                  </button>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    aria-label="Âm lượng video"
+                    title={`Âm lượng ${audioVolume}%`}
+                    value={audioMuted ? 0 : audioVolume}
+                    onChange={(event) => {
+                      const nextVolume = Number(event.target.value);
+                      setAudioVolume(nextVolume);
+                      setAudioMuted(nextVolume === 0);
+                    }}
+                  />
+                  <span>{audioMuted ? 0 : audioVolume}%</span>
+                </div>
+                <button type="button" onClick={() => setViewMode(viewMode === "wide" ? "audience" : "wide")} style={{ background: "#211631", color: "#fff", border: "1px solid #68409a", borderRadius: 12, padding: "6px 10px", fontSize: 11, cursor: "pointer" }}>
+                  {viewMode === "wide" ? "Góc khán giả" : "Góc rộng"}
+                </button>
                 <button
                   type="button"
+                  className="room-chat-toggle"
                   onClick={() => setShowChatPanel(!showChatPanel)}
                   style={{ display: "inline-flex", alignItems: "center", gap: "6px", background: showChatPanel ? "#3b1e5a" : "transparent", color: "#fff", border: "none", borderRadius: "20px", padding: "6px 12px", fontSize: "11px", fontWeight: 600, cursor: "pointer" }}
                 >
@@ -876,54 +988,15 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                   <BarChart2 size={13} /> Bình chọn bỏ qua{skipVote.total > 0 ? ` · ${Math.round(skipVote.ratio * 100)}%` : ""}
                 </button>
 
-                {/* Camera views: panorama / wide / stage / audience seat */}
-                <div style={{ display: "inline-flex", alignItems: "center", gap: "2px", borderLeft: "1px solid rgba(139, 92, 246, 0.25)", paddingLeft: "8px" }}>
-                  {([
-                    ["panorama", "🔭", "Toàn cảnh", "Nhìn từ trên cao xuống toàn bộ phòng"],
-                    ["wide", "🖥", "Góc rộng", "Toàn bộ rạp: sân khấu, màn hình và tất cả các hàng ghế"],
-                    ["stage", "🎭", "Sân khấu", "Đứng gần sân khấu, màn hình choán tầm mắt"],
-                    ["pov", "💺", "Khán giả", "Ngồi vào ghế của bạn và nhìn lên màn hình như đang ở trong rạp"],
-                  ] as Array<[ViewMode, string, string, string]>).map(([mode, icon, label, title]) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => setViewMode(mode)}
-                      title={title}
-                      style={{ display: "inline-flex", alignItems: "center", gap: "5px", background: viewMode === mode ? "#3b1e5a" : "transparent", color: viewMode === mode ? "#fff" : "#c4b5fd", border: "none", borderRadius: "20px", padding: "6px 10px", fontSize: "11px", fontWeight: 600, cursor: "pointer" }}
-                    >
-                      {icon} {label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Sharpness (render quality) */}
-                <select
-                  value={quality}
-                  onChange={(e) => setQuality(Number(e.target.value))}
-                  title="Độ nét hình ảnh 3D — Mượt cho máy yếu, Siêu nét cho máy khỏe"
-                  style={{ background: "#1b1429", color: "#c4b5fd", border: "1px solid rgba(139, 92, 246, 0.35)", borderRadius: "20px", padding: "5px 8px", fontSize: "11px", fontWeight: 600, cursor: "pointer", outline: "none" }}
-                >
-                  <option value={1}>Mượt</option>
-                  <option value={1.5}>Nét</option>
-                  <option value={2}>Siêu nét</option>
-                </select>
-
-                {/* Disco mode toggle (host/moderator; synced to the whole room) */}
-                <button
-                  type="button"
-                  onClick={() => socketRef.current?.emit("room:disco", { disco: !discoMode })}
-                  title="Bật/tắt đèn laser & flash theo nhịp cho cả phòng (chủ phòng/quản trị viên)"
-                  style={{ display: "inline-flex", alignItems: "center", gap: "5px", background: discoMode ? "linear-gradient(135deg, #db2777, #7c3aed)" : "transparent", color: discoMode ? "#fff" : "#c4b5fd", border: "none", borderRadius: "20px", padding: "6px 10px", fontSize: "11px", fontWeight: 700, cursor: "pointer" }}
-                >
-                  🪩 Disco
-                </button>
-
                 <button
                   type="button"
                   onClick={handleToggleFullscreen}
                   style={{ display: "inline-flex", alignItems: "center", gap: "5px", background: "transparent", color: "#c4b5fd", border: "none", padding: "6px 10px", fontSize: "11px", cursor: "pointer" }}
                 >
                   {isFullscreen ? <Minimize size={13} /> : <Maximize size={13} />} Toàn màn hình
+                </button>
+                <button type="button" className="room-focus-trigger" onClick={() => { setFocusMode(true); setShowChatPanel(true); }}>
+                  <Maximize size={13} /> Tập trung
                 </button>
               </div>
 
