@@ -15,8 +15,23 @@ if (process.env.NODE_ENV === "production" && !process.env.JWT_SECRET) {
 const JWT_SECRET = process.env.JWT_SECRET || "tcg-cinema-secret-key-prod-2026-tidb";
 
 const app = express();
-const allowedOrigins = (process.env.WEB_ORIGIN || "http://localhost:3000,http://localhost:3001").split(",");
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+// WEB_ORIGIN: comma-separated list of allowed web origins.
+// A single "*" entry allows any origin (the request origin is reflected back,
+// which stays compatible with credentials: true). Use "*" only when the public
+// web origin is not known in advance; prefer an explicit origin list otherwise.
+const allowedOrigins = (process.env.WEB_ORIGIN || "http://localhost:3000,http://localhost:3001")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+const allowAllOrigins = allowedOrigins.includes("*");
+function corsOrigin(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
+  if (!origin || allowAllOrigins || allowedOrigins.includes(origin)) {
+    callback(null, true);
+  } else {
+    callback(null, false);
+  }
+}
+app.use(cors({ origin: corsOrigin, credentials: true }));
 
 app.get("/health", async (_req, res) => {
   let dbOk = false;
@@ -35,7 +50,7 @@ app.get("/health", async (_req, res) => {
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: allowedOrigins,
+    origin: corsOrigin,
     methods: ["GET", "POST"],
     credentials: true
   },
@@ -1212,7 +1227,9 @@ io.on("connection", (socket: Socket) => {
   }
 });
 
-const port = Number(process.env.REALTIME_PORT || 4001);
+// Port resolution: on Botkeep the assigned public port arrives as SERVER_PORT
+// (or PORT) and must win; locally REALTIME_PORT keeps working as before.
+const port = Number(process.env.SERVER_PORT || process.env.PORT || process.env.REALTIME_PORT || 4001);
 httpServer.listen(port, "0.0.0.0", () => {
   console.log(`Cinema Online 3D Realtime Server listening on :${port}`);
 });

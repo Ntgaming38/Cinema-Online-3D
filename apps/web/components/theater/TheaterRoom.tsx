@@ -208,11 +208,20 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   useEffect(() => {
     if (!sessionReady || passwordRequired || roomNotFound) return;
 
-    const endpoint = process.env.NEXT_PUBLIC_REALTIME_URL || "http://localhost:4001";
-    const socket = io(endpoint, {
+    // Realtime endpoint resolution:
+    // 1. NEXT_PUBLIC_REALTIME_URL set -> use it (split deployment: realtime on its own server).
+    // 2. Production build without it -> same origin as the web page (combined gateway mode:
+    //    the web server proxies /socket.io/ to realtime). io() with no URL uses window.location.
+    // 3. Local dev -> http://localhost:4001.
+    const configuredRealtimeUrl = (process.env.NEXT_PUBLIC_REALTIME_URL || "").trim();
+    const endpoint =
+      configuredRealtimeUrl ||
+      (process.env.NODE_ENV === "production" ? "" : "http://localhost:4001");
+    const socketOptions = {
       auth: { token: authToken },
-      transports: ["websocket", "polling"]
-    });
+      transports: ["websocket", "polling"] as ("websocket" | "polling")[]
+    };
+    const socket = endpoint ? io(endpoint, socketOptions) : io(socketOptions);
 
     socketRef.current = socket;
 
