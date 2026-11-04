@@ -32,6 +32,11 @@ function main() {
     }
   }
 
+  if (process.env.CINEMA_BUILD_ONLY === "1") {
+    console.log("[start-realtime] Build-only mode — build is ready, exiting without starting the server.");
+    return;
+  }
+
   const child = spawn(process.execPath, [entry], {
     cwd: realtimeDir,
     stdio: "inherit",

@@ -34,12 +34,24 @@ function main() {
     const build = spawnSync("npm", ["--workspace", "@cinema-online-3d/web", "run", "build"], {
       cwd: ROOT,
       stdio: "inherit",
-      env: process.env,
+      // Cap the build's V8 heap so garbage collection works harder
+      // instead of the process ballooning into the 512MB server limit.
+      env: {
+        ...process.env,
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, "--max-old-space-size=384"]
+          .filter(Boolean)
+          .join(" "),
+      },
     });
     if (build.error || build.status !== 0) {
       console.error("[start-web] Web build failed; cannot start.");
       process.exit(build.status ?? 1);
     }
+  }
+
+  if (process.env.CINEMA_BUILD_ONLY === "1") {
+    console.log("[start-web] Build-only mode — build is ready, exiting without starting the server.");
+    return;
   }
 
   const nextBin = findNextBin(ROOT);
