@@ -9,7 +9,7 @@
 // The gateway is plain Node.js builtins (http/net) — no extra dependencies.
 // Signals are forwarded to both children; if either child dies, the gateway
 // shuts the other one down and exits non-zero.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
@@ -103,6 +103,13 @@ export function waitForPort(port, { timeoutMs = 300_000, intervalMs = 500 } = {}
 async function main() {
   purgeNpmCache();
   const { publicPort, webPort, realtimePort } = resolveGatewayPorts();
+
+  // Build SEQUENTIALLY before starting anything. On the 512MB Botkeep
+  // Free tier, building web while the realtime server is already running
+  // (and vice versa) lets the Next.js build worker get SIGKILLed by the
+  // memory limit — observed live 2026-11-05. Build-only passes run one
+  // at a time; the real children below then find .next/dist ready and
+  // skip straight to serving.
   console.log(
     `[start-all] Gateway plan — public :${publicPort} | web internal :${webPort} | realtime internal :${realtimePort}`
   );
@@ -116,6 +123,20 @@ async function main() {
   delete realtimeEnv.SERVER_PORT;
   delete realtimeEnv.PORT;
   realtimeEnv.REALTIME_PORT = String(realtimePort);
+
+  const buildOnly = (name, script, env) => {
+    const res = spawnSync(process.execPath, [path.join(ROOT, "scripts", script)], {
+      cwd: ROOT,
+      stdio: "inherit",
+      env: { ...env, CINEMA_BUILD_ONLY: "1" },
+    });
+    if (res.error || res.status !== 0) {
+      console.error(`[start-all] ${name} build failed — cannot start.`);
+      process.exit(res.status ?? 1);
+    }
+  };
+  buildOnly("web", "start-web.mjs", webEnv);
+  buildOnly("realtime", "start-realtime.mjs", realtimeEnv);
 
   const children = [];
   let shuttingDown = false;
