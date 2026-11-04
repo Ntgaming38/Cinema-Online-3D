@@ -14,7 +14,7 @@ import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ROOT } from "./ensure-prisma.mjs";
+import { ROOT, purgeNpmCache } from "./ensure-prisma.mjs";
 
 export function isSocketIoPath(rawUrl = "") {
   const pathname = rawUrl.split("?")[0];
@@ -101,6 +101,7 @@ export function waitForPort(port, { timeoutMs = 300_000, intervalMs = 500 } = {}
 }
 
 async function main() {
+  purgeNpmCache();
   const { publicPort, webPort, realtimePort } = resolveGatewayPorts();
   console.log(
     `[start-all] Gateway plan — public :${publicPort} | web internal :${webPort} | realtime internal :${realtimePort}`

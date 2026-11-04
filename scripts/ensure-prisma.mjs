@@ -10,6 +10,7 @@
 // own Prisma errors at runtime if generation really is impossible.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -42,6 +43,29 @@ export function runPrismaGenerate(root = ROOT) {
     });
   }
   return !result.error && result.status === 0;
+}
+
+// Botkeep Free servers have a 1,024MB disk quota. A full `npm ci` leaves
+// behind two heavy things: node_modules (~750MB, needed) and the npm
+// download cache (~250MB, only useful to speed up the NEXT install).
+// Together with the .next build output they exceed the quota and the
+// daemon kills the process mid-build. The launchers therefore delete the
+// download cache right after install, before building: installs get
+// slower (tarballs are re-downloaded next boot) but the build fits.
+// Opt out with CINEMA_KEEP_NPM_CACHE=1.
+export function purgeNpmCache() {
+  if (process.env.CINEMA_KEEP_NPM_CACHE === "1") return;
+  try {
+    const cacheDir =
+      process.env.npm_config_cache || path.join(os.homedir(), ".npm");
+    const target = path.join(cacheDir, "_cacache");
+    if (fs.existsSync(target)) {
+      fs.rmSync(target, { recursive: true, force: true });
+      console.log(`[launch] Purged npm download cache at ${target} to free disk for the build.`);
+    }
+  } catch (err) {
+    console.warn(`[launch] Could not purge npm cache (continuing): ${err.message}`);
+  }
 }
 
 export function ensurePrisma(root = ROOT) {
