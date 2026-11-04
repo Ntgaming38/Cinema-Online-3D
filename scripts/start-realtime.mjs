@@ -10,12 +10,13 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ROOT, ensurePrisma } from "./ensure-prisma.mjs";
+import { ROOT, ensurePrisma, purgeNpmCache } from "./ensure-prisma.mjs";
 
 function main() {
   const realtimeDir = path.join(ROOT, "apps/realtime");
   const entry = path.join(realtimeDir, "dist/index.js");
 
+  purgeNpmCache();
   ensurePrisma(ROOT);
 
   if (!fs.existsSync(entry)) {

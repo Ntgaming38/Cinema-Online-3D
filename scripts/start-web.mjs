@@ -8,7 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ROOT, ensurePrisma } from "./ensure-prisma.mjs";
+import { ROOT, ensurePrisma, purgeNpmCache } from "./ensure-prisma.mjs";
 
 export function resolveWebPort(env = process.env) {
   return Number(env.CINEMA_WEB_PORT || env.SERVER_PORT || env.PORT || 3000);
@@ -26,6 +26,7 @@ function main() {
   const port = resolveWebPort();
   const webDir = path.join(ROOT, "apps/web");
 
+  purgeNpmCache();
   ensurePrisma(ROOT);
 
   if (!fs.existsSync(path.join(webDir, ".next/BUILD_ID"))) {
