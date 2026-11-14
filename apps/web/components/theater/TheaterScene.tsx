@@ -23,6 +23,7 @@ export interface TheaterSceneProps {
   onSelectSeat?: (seatLabel: string) => void;
   quality?: "low" | "medium" | "high";
   overlayElement?: HTMLDivElement | null;
+  disco?: boolean;
 }
 
 // Wardrobe shirt colors are stored by Vietnamese name; the 3D viewer needs hex.
@@ -974,6 +975,80 @@ function CinemaEnclosure({ theme, isPlaying }: { theme: string; isPlaying: boole
   );
 }
 
+const DISCO_COLORS = ["#f472b6", "#22d3ee", "#a3e635", "#c084fc", "#fbbf24", "#fb7185", "#34d399", "#60a5fa"];
+const DISCO_BPM = 137;
+
+// Disco mode: spinning mirror ball, eight sweeping laser beams, wall spot
+// cones and two flash lights alternating on the beat (137 BPM). Rendered
+// only while disco is on; room geometry here: walls x=±9.6, ceiling y=9.5.
+function DiscoRig() {
+  const spinRef = useRef<THREE.Group>(null);
+  const ballRef = useRef<THREE.Mesh>(null);
+  const beamRefs = useRef<Array<THREE.Group | null>>([]);
+  const flashL = useRef<THREE.PointLight>(null);
+  const flashR = useRef<THREE.PointLight>(null);
+
+  useFrame(({ clock }) => {
+    const t = clock.elapsedTime;
+    if (spinRef.current) spinRef.current.rotation.y = -t * 0.55;
+    if (ballRef.current) ballRef.current.rotation.y = t * 0.8;
+    beamRefs.current.forEach((g, i) => {
+      if (g) g.rotation.x = 0.95 + Math.sin(t * 1.4 + i * 1.7) * 0.38;
+    });
+    const beat = t * (DISCO_BPM / 60);
+    if (flashL.current) flashL.current.intensity = 3 + 34 * Math.pow(1 - (beat % 1), 2);
+    if (flashR.current) flashR.current.intensity = 3 + 34 * Math.pow(1 - ((beat + 0.5) % 1), 2);
+  });
+
+  return (
+    <group>
+      {/* Mirror ball on its mount rod under the ceiling */}
+      <mesh position={[0, 8.95, -0.6]}>
+        <cylinderGeometry args={[0.03, 0.03, 1.1, 6]} />
+        <meshStandardMaterial color="#17131f" metalness={0.6} roughness={0.4} />
+      </mesh>
+      <mesh ref={ballRef} position={[0, 8.05, -0.6]}>
+        <sphereGeometry args={[0.36, 24, 18]} />
+        <meshStandardMaterial color="#d7daea" metalness={0.85} roughness={0.3} emissive="#23233a" flatShading />
+      </mesh>
+
+      {/* Laser beams sweeping from the ball */}
+      <group ref={spinRef} position={[0, 8.05, -0.6]}>
+        {DISCO_COLORS.map((color, i) => (
+          <group key={color} rotation={[0, (i * Math.PI) / 4, 0]}>
+            <group ref={(g) => { beamRefs.current[i] = g; }}>
+              <mesh position={[0, 0, 6.5]} rotation={[Math.PI / 2, 0, 0]}>
+                <cylinderGeometry args={[0.2, 0.02, 13, 6, 1, true]} />
+                <meshBasicMaterial color={color} transparent opacity={0.32} blending={THREE.AdditiveBlending} depthWrite={false} side={THREE.DoubleSide} />
+              </mesh>
+            </group>
+          </group>
+        ))}
+      </group>
+
+      {/* Wall spotlight cones */}
+      {([-1, 1] as const).map((side) =>
+        [-4, -0.5, 3].map((z, i) => (
+          <group key={`${side}-${z}`} position={[side * 9.3, 5.6, z]}>
+            <group rotation={[0, side * -Math.PI / 2, 0]}>
+              <group rotation={[0.55, 0, 0]}>
+                <mesh position={[0, 0, 4.5]} rotation={[Math.PI / 2, 0, 0]}>
+                  <cylinderGeometry args={[1.6, 0.12, 9, 12, 1, true]} />
+                  <meshBasicMaterial color={DISCO_COLORS[(i + (side > 0 ? 3 : 0)) % DISCO_COLORS.length]} transparent opacity={0.1} blending={THREE.AdditiveBlending} depthWrite={false} side={THREE.DoubleSide} />
+                </mesh>
+              </group>
+            </group>
+          </group>
+        ))
+      )}
+
+      {/* Beat flashes */}
+      <pointLight ref={flashL} position={[-4.5, 5.4, 0.5]} color="#ff2fb3" distance={20} />
+      <pointLight ref={flashR} position={[4.5, 5.4, 0.5]} color="#22d3ee" distance={20} />
+    </group>
+  );
+}
+
 export function TheaterScene({
   viewMode = "wide",
   selectedSeat,
@@ -983,7 +1058,8 @@ export function TheaterScene({
   recentReactions = [],
   onSelectSeat,
   quality = "high",
-  overlayElement
+  overlayElement,
+  disco = false
 }: TheaterSceneProps) {
   const isSky = theme === "sky";
   const isCyberpunk = theme === "cyberpunk";
@@ -1187,6 +1263,8 @@ export function TheaterScene({
           />
         );
       })}
+
+      {disco && <DiscoRig />}
 
       {/* Fixed camera (back-center view, like the reference mockup) so the HTML
           video overlay stays glued to the 3D screen at every viewport size. */}

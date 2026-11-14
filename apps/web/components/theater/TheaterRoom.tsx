@@ -128,6 +128,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   const [queueForm, setQueueForm] = useState({ title: "", sourceUrl: "", type: "YouTube", durationMin: "under5", hasSubtitle: "no", note: "" });
   const [skipVote, setSkipVote] = useState({ votes: 0, total: 0, ratio: 0 });
   const [actingHost, setActingHost] = useState<{ userId: string; name: string } | null>(null);
+  const [disco, setDisco] = useState(false);
   const [donations, setDonations] = useState<Array<{ amount: number; message?: string; userId: string; displayName: string; createdAt: string }>>([]);
   const [donationInput, setDonationInput] = useState("");
   const [projectedImage, setProjectedImage] = useState<{ url: string; setByName: string } | null>(null);
@@ -399,6 +400,10 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
     socket.on("room:host", (data: { actingHostId: string | null; actingHostName: string | null }) => {
       setActingHost(data.actingHostId ? { userId: data.actingHostId, name: data.actingHostName || "" } : null);
+    });
+
+    socket.on("room:disco:changed", (data: { disco: boolean }) => {
+      setDisco(Boolean(data.disco));
     });
 
     socket.on("vote:skip:result", () => {
@@ -902,6 +907,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                 isPlaying={isPlaying}
                 quality={effectiveSceneQuality}
                 theme={roomTheme}
+                disco={disco}
                 recentReactions={sceneReactions}
                 onSelectSeat={handleSelectSeat}
               />
@@ -962,6 +968,9 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                 </div>
                 <button type="button" onClick={() => setViewMode(viewMode === "wide" ? "audience" : "wide")} style={{ background: "#211631", color: "#fff", border: "1px solid #68409a", borderRadius: 12, padding: "6px 10px", fontSize: 11, cursor: "pointer" }}>
                   {viewMode === "wide" ? "Góc khán giả" : "Góc rộng"}
+                </button>
+                <button type="button" onClick={() => socketRef.current?.emit("room:disco", { disco: !disco })} title="Chế độ disco cho cả phòng (chủ phòng/mod bật tắt)" style={{ background: disco ? "#831843" : "#211631", color: "#fff", border: "1px solid #68409a", borderRadius: 12, padding: "6px 10px", fontSize: 11, cursor: "pointer" }}>
+                  🪩 {disco ? "Tắt Disco" : "Disco"}
                 </button>
                 <button
                   type="button"
