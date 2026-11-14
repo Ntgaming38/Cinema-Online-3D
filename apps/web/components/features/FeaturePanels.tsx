@@ -2,8 +2,9 @@
 
 import React, { useState, useEffect } from "react";
 import {
-  Trophy, BarChart2, Film, Share2
+  Trophy, BarChart2, Film, Share2, QrCode
 } from "lucide-react";
+import { qrSvgTag } from "../../lib/qr";
 import { LeaderboardPanel } from "./LeaderboardPanel";
 import { VideoQueuePanel } from "./VideoQueuePanel";
 import { DonationPanel } from "./DonationPanel";
@@ -57,6 +58,7 @@ export function FeaturePanels(props: FeaturePanelsProps) {
   } = props;
 
   const [copyTooltip, setCopyTooltip] = useState(false);
+  const [showQr, setShowQr] = useState(false);
   const [imageUrl, setImageUrl] = useState("");
 
   const handleClaim = (key: string) => socket.emit("mission:claim", { missionKey: key });
@@ -106,9 +108,19 @@ export function FeaturePanels(props: FeaturePanelsProps) {
           { key: "leaderboard", label: "BXH", icon: <BarChart2 size={14} />, on: () => setFeatureTab("leaderboard") },
           { key: "queue", label: "Hàng chờ", icon: <Film size={14} />, on: () => setFeatureTab("queue") },
           { key: "invite", label: "Mời bạn", icon: <Share2 size={14} />, on: handleCopyInvite },
+          { key: "qr", label: "Mã QR", icon: <QrCode size={14} />, on: () => setShowQr(v => !v) },
         ].map(b => btn(b.key, b.label, b.icon, b.on))}
         {copyTooltip && <span style={{ fontSize: "10px", color: "#4ade80", marginLeft: "6px" }}>Đã sao chép link!</span>}
       </div>
+
+      {showQr && (
+        <div style={{ position: "fixed", right: "16px", bottom: "124px", zIndex: 400, background: "#ffffff", borderRadius: "14px", padding: "14px", width: "216px", boxShadow: "0 12px 32px rgba(0,0,0,0.45)", textAlign: "center" }}>
+          <div style={{ width: "180px", margin: "0 auto" }} dangerouslySetInnerHTML={{ __html: qrSvgTag(`${window.location.origin}/rooms/${roomCode}`) }} />
+          <div style={{ color: "#1f2430", fontSize: "11.5px", fontWeight: 800, marginTop: "9px" }}>Quét để vào phòng {roomCode}</div>
+          <div style={{ color: "#6b7280", fontSize: "9.5px", wordBreak: "break-all", marginTop: "2px" }}>{`${window.location.origin}/rooms/${roomCode}`}</div>
+          <button type="button" onClick={() => setShowQr(false)} style={{ marginTop: "9px", background: "#161129", color: "#fff", border: "none", borderRadius: "8px", padding: "5px 12px", fontSize: "10.5px", cursor: "pointer" }}>Đóng</button>
+        </div>
+      )}
 
       {/* MISSION PANEL */}
       {featureTab === "mission" && (
