@@ -34,6 +34,7 @@ model User {
   exp          Int           @default(0)
   balance      Int           @default(0)
   totalDonated Int           @default(0)
+  gender       String?       @db.VarChar(10)
   shirtColor   String?       @db.VarChar(20)
   hairStyle    String?       @db.VarChar(30)
   accessory    String?       @db.VarChar(30)

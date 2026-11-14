@@ -2,9 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import {
-  Trophy, BarChart2, Film, Check, X, Timer, User, Share2,
-  Send, Plus, Maximize, Minimize,
-  MessageSquare, Users, ArrowLeft, ChevronRight, ChevronLeft
+  Trophy, BarChart2, Film, Share2
 } from "lucide-react";
 import { LeaderboardPanel } from "./LeaderboardPanel";
 import { VideoQueuePanel } from "./VideoQueuePanel";
@@ -12,14 +10,6 @@ import { DonationPanel } from "./DonationPanel";
 import { ImageProjectionPanel } from "./ImageProjectionPanel";
 import { ThemeTogglePanel } from "./ThemeTogglePanel";
 import { CharacterPanel } from "./CharacterPanel";
-
-const HAIR_STYLES = [
-  "Tóc ngắn", "Tóc dài", "Tóc búi", "Tóc xoăn", "Tóc vuốt", "Tóc mái",
-  "Tóc 2 bím", "Tóc dài thẳng", "Tóc tém", "Tóc chỏm", "Tóc undercut",
-  "Đầu hói", "Tóc bob", "Tóc dài xoăn", "Tóc mohawk", "Tóc đuôi ngựa", "Tóc bím lệch",
-];
-const SHIRT_COLORS = ["Đen", "Xám", "Trắng", "Vàng", "Đỏ", "Tím", "Cam", "Xanh lá", "Xanh dương", "Hồng", "Nâu"];
-const ACCESSORIES = ["Kính", "Mũ", "Tai nghe", "Vương miện", "Nơ", "Kính râm", "Mũ len", "Mũ lưỡi trai", "Mũ bảo hiểm", "Mũ hoa", "Mũ phù thủy", "Mũ tai mèo", "Tai mèo", "Sừng quỷ", "Halo", "Bông tai", "Mặt nạ", "Băng đô"];
 
 const MISSIONS: Array<{ key: string; label: string; exp: number; target: number }> = [
   { key: "daily_checkin", label: "Chào buổi sáng", exp: 5, target: 1 },
@@ -33,56 +23,39 @@ const MISSIONS: Array<{ key: string; label: string; exp: number; target: number 
 interface FeaturePanelsProps {
   socket: any;
   canModerate?: boolean;
-  userId: string;
-  displayName: string;
-  avatarUrl?: string;
   roomCode: string;
   currentTheme: string;
   onThemeChange: (theme: string) => void;
   currentUser: { id: string; displayName: string; avatarUrl?: string; isGuest?: boolean; balance?: number; totalDonated?: number } | null;
   missions: any[];
-  setMissions: React.Dispatch<React.SetStateAction<any[]>>;
   leaderboard: any[];
-  setLeaderboard: React.Dispatch<React.SetStateAction<any[]>>;
   leaderboardTab: "level" | "support";
   setLeaderboardTab: React.Dispatch<React.SetStateAction<"level" | "support">>;
   videoQueue: any[];
-  setVideoQueue: React.Dispatch<React.SetStateAction<any[]>>;
   queueForm: any;
   setQueueForm: React.Dispatch<React.SetStateAction<any>>;
-  skipVote: any;
-  setSkipVote: React.Dispatch<React.SetStateAction<any>>;
-  appearance: any;
-  setAppearance: React.Dispatch<React.SetStateAction<any>>;
   userAppearance: any;
   setUserAppearance: React.Dispatch<React.SetStateAction<any>>;
   donations: any[];
-  setDonations: React.Dispatch<React.SetStateAction<any[]>>;
   donationInput: string;
   setDonationInput: React.Dispatch<React.SetStateAction<string>>;
   projectedImage: { url: string; setByName: string } | null;
-  setProjectedImage: React.Dispatch<React.SetStateAction<{ url: string; setByName: string } | null>>;
   featureTab: "mission" | "leaderboard" | "queue" | "character" | "donation" | "image" | "theme" | null;
   setFeatureTab: React.Dispatch<React.SetStateAction<"mission" | "leaderboard" | "queue" | "character" | "donation" | "image" | "theme" | null>>;
 }
 
 export function FeaturePanels(props: FeaturePanelsProps) {
   const {
-    socket, canModerate, userId, displayName, avatarUrl, roomCode,
+    socket, canModerate, roomCode,
     currentTheme, onThemeChange, currentUser,
-    missions, setMissions, leaderboard, setLeaderboard,
+    missions, leaderboard,
     leaderboardTab, setLeaderboardTab,
-    videoQueue, setVideoQueue, queueForm, setQueueForm,
-    skipVote, setSkipVote, appearance, setAppearance, userAppearance, setUserAppearance,
-    donations, setDonations, donationInput, setDonationInput,
-    projectedImage, setProjectedImage, featureTab, setFeatureTab,
+    videoQueue, queueForm, setQueueForm,
+    userAppearance, setUserAppearance,
+    donations, donationInput, setDonationInput,
+    projectedImage, featureTab, setFeatureTab,
   } = props;
 
-  const [showMission, setShowMission] = useState(false);
-  const [showLeaderboard, setShowLeaderboard] = useState(false);
-  const [showQueue, setShowQueue] = useState(false);
-  const [showCharacter, setShowCharacter] = useState(false);
-  const [showDonation, setShowDonation] = useState(false);
   const [copyTooltip, setCopyTooltip] = useState(false);
   const [imageUrl, setImageUrl] = useState("");
 

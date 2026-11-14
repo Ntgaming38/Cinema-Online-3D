@@ -9,12 +9,12 @@ export interface SeatOccupant {
   userId: string;
   displayName: string;
   avatarUrl?: string;
+  gender?: string;
   appearance?: { shirtColor?: string; hairStyle?: string; accessory?: string };
 }
 
 export interface TheaterSceneProps {
   viewMode?: "wide" | "audience";
-  currentUserId?: string;
   selectedSeat?: string;
   occupiedSeats: Record<string, SeatOccupant>;
   isPlaying: boolean;
@@ -22,7 +22,6 @@ export interface TheaterSceneProps {
   recentReactions?: Array<{ id: string; emoji: string; userName: string; timestamp: number }>;
   onSelectSeat?: (seatLabel: string) => void;
   quality?: "low" | "medium" | "high";
-  laserFlash?: boolean;
   overlayElement?: HTMLDivElement | null;
 }
 
@@ -39,53 +38,406 @@ export function shirtHex(color?: string, fallback = "#a855f7"): string {
   return SHIRT_HEX[color] || fallback;
 }
 
-function VoxelViewer({ shirtColor, hairColor = "#2a1a10" }: { shirtColor: string; hairColor?: string }) {
+// Palette used to give each viewer a distinct (deterministic) hair color.
+const HAIR_HEX = ["#2a1a10", "#0f0f14", "#4a2c14", "#7a4a21", "#b08954", "#d9a441", "#9aa1ac", "#b91c1c", "#274690", "#5b21b6"];
+
+// ---------- Character hair styles (voxel-chibi) ----------
+// Head local space: face looks toward -Z, head sphere radius ~0.205.
+function HairMesh({ style, color, female }: { style?: string; color: string; female?: boolean }) {
+  const s = style || (female ? "Tóc dài" : "Tóc ngắn");
+  if (s === "Đầu hói") return null;
+  const mat = <meshStandardMaterial color={color} roughness={0.9} />;
+  const cap = (
+    <mesh position={[0, 0.11, 0.01]} rotation={[0.3, 0, 0]}>
+      <sphereGeometry args={[0.208, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2]} />
+      {mat}
+    </mesh>
+  );
+  switch (s) {
+    case "Tóc dài":
+    case "Tóc dài thẳng":
+      return (
+        <group>
+          {cap}
+          <RoundedBox position={[0, -0.08, 0.14]} args={[0.3, 0.44, 0.11]} radius={0.05} smoothness={2}>{mat}</RoundedBox>
+        </group>
+      );
+    case "Tóc dài xoăn":
+      return (
+        <group>
+          {cap}
+          <RoundedBox position={[0, -0.08, 0.14]} args={[0.3, 0.44, 0.11]} radius={0.05} smoothness={2}>{mat}</RoundedBox>
+          {[-0.12, 0, 0.12].map((x) => (
+            <mesh key={x} position={[x, -0.26, 0.14]}><sphereGeometry args={[0.075, 8, 8]} />{mat}</mesh>
+          ))}
+        </group>
+      );
+    case "Tóc búi":
+      return (<group>{cap}<mesh position={[0, 0.3, 0.02]}><sphereGeometry args={[0.09, 10, 8]} />{mat}</mesh></group>);
+    case "Tóc 2 bím":
+      return (
+        <group>
+          {cap}
+          <mesh position={[-0.2, 0.02, 0.04]}><sphereGeometry args={[0.075, 10, 8]} />{mat}</mesh>
+          <mesh position={[0.2, 0.02, 0.04]}><sphereGeometry args={[0.075, 10, 8]} />{mat}</mesh>
+          <mesh position={[-0.2, -0.14, 0.05]}><sphereGeometry args={[0.06, 8, 8]} />{mat}</mesh>
+          <mesh position={[0.2, -0.14, 0.05]}><sphereGeometry args={[0.06, 8, 8]} />{mat}</mesh>
+        </group>
+      );
+    case "Tóc bím lệch":
+      return (
+        <group>
+          {cap}
+          <mesh position={[0.2, -0.05, 0.05]}><sphereGeometry args={[0.08, 10, 8]} />{mat}</mesh>
+          <mesh position={[0.2, -0.2, 0.06]}><sphereGeometry args={[0.06, 8, 8]} />{mat}</mesh>
+        </group>
+      );
+    case "Tóc bob":
+      return (
+        <group>
+          {cap}
+          <RoundedBox position={[0, -0.02, 0.1]} args={[0.34, 0.3, 0.12]} radius={0.06} smoothness={2}>{mat}</RoundedBox>
+        </group>
+      );
+    case "Tóc mohawk":
+      return (<group>{cap}<mesh position={[0, 0.24, 0]}><boxGeometry args={[0.07, 0.1, 0.34]} />{mat}</mesh></group>);
+    case "Tóc xoăn":
+      return (
+        <group>
+          {cap}
+          {[-0.12, 0, 0.12].map((x) => (<mesh key={x} position={[x, 0.19, -0.02]}><sphereGeometry args={[0.06, 8, 8]} />{mat}</mesh>))}
+        </group>
+      );
+    case "Tóc đuôi ngựa":
+      return (
+        <group>
+          {cap}
+          <mesh position={[0, 0.22, 0.16]}><sphereGeometry args={[0.08, 10, 8]} />{mat}</mesh>
+          <mesh position={[0, 0.1, 0.2]}><cylinderGeometry args={[0.035, 0.05, 0.18, 8]} />{mat}</mesh>
+        </group>
+      );
+    default:
+      // Tóc ngắn / undercut / tém / chỏm / vuốt / mái: neat cap
+      return <group>{cap}</group>;
+  }
+}
+
+// ---------- Character accessories (glasses, hats, headsets, ...) ----------
+function AccessoryMesh({ name }: { name?: string }) {
+  if (!name || name === "Không") return null;
+  const dark = <meshStandardMaterial color="#111827" roughness={0.35} metalness={0.4} />;
+  switch (name) {
+    case "Kính":
+    case "Kính 3D": {
+      const lens = <meshStandardMaterial color={name === "Kính 3D" ? "#0f172a" : "#dbeafe"} roughness={0.25} metalness={0.3} transparent opacity={name === "Kính 3D" ? 0.95 : 0.5} />;
+      return (
+        <group>
+          <mesh position={[-0.075, 0.02, -0.212]}><boxGeometry args={[0.085, 0.06, 0.02]} />{lens}</mesh>
+          <mesh position={[0.075, 0.02, -0.212]}><boxGeometry args={[0.085, 0.06, 0.02]} />{lens}</mesh>
+          <mesh position={[0, 0.035, -0.212]}><boxGeometry args={[0.05, 0.015, 0.015]} />{dark}</mesh>
+        </group>
+      );
+    }
+    case "Kính râm":
+      return (
+        <group>
+          <mesh position={[-0.075, 0.02, -0.215]}><boxGeometry args={[0.09, 0.065, 0.02]} /><meshStandardMaterial color="#020617" roughness={0.2} /></mesh>
+          <mesh position={[0.075, 0.02, -0.215]}><boxGeometry args={[0.09, 0.065, 0.02]} /><meshStandardMaterial color="#020617" roughness={0.2} /></mesh>
+          <mesh position={[0, 0.035, -0.215]}><boxGeometry args={[0.05, 0.015, 0.015]} />{dark}</mesh>
+        </group>
+      );
+    case "Tai nghe":
+      return (
+        <group>
+          <mesh position={[0, 0.1, 0]}><torusGeometry args={[0.215, 0.022, 8, 20, Math.PI]} /><meshStandardMaterial color="#1f2937" roughness={0.5} /></mesh>
+          <mesh position={[-0.215, 0, 0]} rotation={[0, 0, Math.PI / 2]}><cylinderGeometry args={[0.055, 0.055, 0.05, 12]} /><meshStandardMaterial color="#111827" roughness={0.4} /></mesh>
+          <mesh position={[0.215, 0, 0]} rotation={[0, 0, Math.PI / 2]}><cylinderGeometry args={[0.055, 0.055, 0.05, 12]} /><meshStandardMaterial color="#111827" roughness={0.4} /></mesh>
+        </group>
+      );
+    case "Mũ":
+    case "Mũ len":
+      return (
+        <group>
+          <mesh position={[0, 0.17, 0]}><cylinderGeometry args={[0.235, 0.235, 0.025, 20]} /><meshStandardMaterial color={name === "Mũ len" ? "#be123c" : "#7f1d1d"} roughness={0.75} /></mesh>
+          <mesh position={[0, 0.27, 0]}>
+            {name === "Mũ len" ? <sphereGeometry args={[0.215, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2]} /> : <cylinderGeometry args={[0.14, 0.155, 0.18, 20]} />}
+            <meshStandardMaterial color={name === "Mũ len" ? "#be123c" : "#991b1b"} roughness={0.75} />
+          </mesh>
+          {name === "Mũ len" && <mesh position={[0, 0.4, 0]}><sphereGeometry args={[0.05, 8, 8]} /><meshStandardMaterial color="#fecdd3" roughness={0.9} /></mesh>}
+        </group>
+      );
+    case "Mũ lưỡi trai":
+      return (
+        <group>
+          <mesh position={[0, 0.18, 0]}><cylinderGeometry args={[0.15, 0.16, 0.16, 20]} /><meshStandardMaterial color="#1d4ed8" roughness={0.7} /></mesh>
+          <mesh position={[0, 0.26, 0]}><sphereGeometry args={[0.15, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2]} /><meshStandardMaterial color="#1d4ed8" roughness={0.7} /></mesh>
+          <mesh position={[0, 0.165, -0.24]}><boxGeometry args={[0.24, 0.015, 0.13]} /><meshStandardMaterial color="#1e40af" roughness={0.7} /></mesh>
+        </group>
+      );
+    case "Mũ bảo hiểm":
+      return <mesh position={[0, 0.12, 0]}><sphereGeometry args={[0.235, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2]} /><meshStandardMaterial color="#94a3b8" metalness={0.6} roughness={0.3} /></mesh>;
+    case "Mũ hoa":
+      return (
+        <group>
+          <mesh position={[0, 0.17, 0]}><cylinderGeometry args={[0.24, 0.24, 0.03, 20]} /><meshStandardMaterial color="#fde68a" roughness={0.8} /></mesh>
+          {["#f472b6", "#a78bfa", "#f87171", "#4ade80", "#38bdf8"].map((c, i) => (
+            <mesh key={c} position={[Math.sin((i / 5) * Math.PI * 2) * 0.2, 0.2, Math.cos((i / 5) * Math.PI * 2) * 0.2]}>
+              <sphereGeometry args={[0.045, 8, 8]} /><meshStandardMaterial color={c} roughness={0.6} />
+            </mesh>
+          ))}
+        </group>
+      );
+    case "Mũ phù thủy":
+      return (
+        <group>
+          <mesh position={[0, 0.18, 0]}><cylinderGeometry args={[0.26, 0.26, 0.025, 20]} /><meshStandardMaterial color="#4c1d95" roughness={0.8} /></mesh>
+          <mesh position={[0, 0.4, 0]} rotation={[0, 0, 0.12]}><coneGeometry args={[0.15, 0.42, 12]} /><meshStandardMaterial color="#5b21b6" roughness={0.8} /></mesh>
+        </group>
+      );
+    case "Mũ tai mèo":
+    case "Tai mèo":
+    case "Băng đô tai mèo": {
+      const ears = (
+        <>
+          <mesh position={[-0.13, 0.26, 0]} rotation={[0, 0, 0.35]}><coneGeometry args={[0.06, 0.14, 6]} /><meshStandardMaterial color="#1f2937" roughness={0.8} /></mesh>
+          <mesh position={[0.13, 0.26, 0]} rotation={[0, 0, -0.35]}><coneGeometry args={[0.06, 0.14, 6]} /><meshStandardMaterial color="#1f2937" roughness={0.8} /></mesh>
+          <mesh position={[-0.13, 0.26, -0.02]} rotation={[0, 0, 0.35]}><coneGeometry args={[0.03, 0.08, 6]} /><meshStandardMaterial color="#f9a8d4" roughness={0.8} /></mesh>
+          <mesh position={[0.13, 0.26, -0.02]} rotation={[0, 0, -0.35]}><coneGeometry args={[0.03, 0.08, 6]} /><meshStandardMaterial color="#f9a8d4" roughness={0.8} /></mesh>
+        </>
+      );
+      return name === "Băng đô tai mèo" ? (
+        <group>
+          {ears}
+          <mesh position={[0, 0.2, 0]} rotation={[0.4, 0, 0]}><torusGeometry args={[0.2, 0.028, 6, 18, Math.PI]} /><meshStandardMaterial color="#ec4899" roughness={0.7} /></mesh>
+        </group>
+      ) : <group>{ears}</group>;
+    }
+    case "Sừng quỷ":
+      return (
+        <group>
+          <mesh position={[-0.17, 0.27, 0]} rotation={[0, 0, 0.5]}><coneGeometry args={[0.035, 0.12, 6]} /><meshStandardMaterial color="#d6d3d1" roughness={0.6} /></mesh>
+          <mesh position={[0.17, 0.27, 0]} rotation={[0, 0, -0.5]}><coneGeometry args={[0.035, 0.12, 6]} /><meshStandardMaterial color="#d6d3d1" roughness={0.6} /></mesh>
+        </group>
+      );
+    case "Vương miện":
+      return (
+        <group position={[0, 0.21, 0]}>
+          <mesh><cylinderGeometry args={[0.185, 0.2, 0.06, 16]} /><meshStandardMaterial color="#facc15" metalness={0.75} roughness={0.3} /></mesh>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <mesh key={i} position={[Math.sin((i / 5) * Math.PI * 2) * 0.185, 0.07, Math.cos((i / 5) * Math.PI * 2) * 0.185]}>
+              <coneGeometry args={[0.032, 0.1, 6]} /><meshStandardMaterial color="#fde047" metalness={0.75} roughness={0.3} />
+            </mesh>
+          ))}
+        </group>
+      );
+    case "Halo":
+      return <mesh position={[0, 0.34, 0]} rotation={[Math.PI / 2, 0, 0]}><torusGeometry args={[0.12, 0.018, 8, 24]} /><meshStandardMaterial color="#fde68a" emissive="#fbbf24" emissiveIntensity={1.6} /></mesh>;
+    case "Nơ":
+      return (
+        <group position={[0.13, 0.24, -0.06]} rotation={[0, 0.4, 0]}>
+          <mesh position={[-0.04, 0, 0]} rotation={[0, 0, 0.5]}><coneGeometry args={[0.035, 0.08, 6]} /><meshStandardMaterial color="#f472b6" roughness={0.7} /></mesh>
+          <mesh position={[0.04, 0, 0]} rotation={[0, 0, -0.5]}><coneGeometry args={[0.035, 0.08, 6]} /><meshStandardMaterial color="#f472b6" roughness={0.7} /></mesh>
+          <mesh><sphereGeometry args={[0.025, 8, 8]} /><meshStandardMaterial color="#ec4899" roughness={0.7} /></mesh>
+        </group>
+      );
+    case "Bông tai":
+      return (
+        <group>
+          <mesh position={[-0.2, 0.05, 0]}><sphereGeometry args={[0.05, 8, 8]} /><meshStandardMaterial color="#f9a8d4" roughness={0.8} /></mesh>
+          <mesh position={[0.2, 0.05, 0]}><sphereGeometry args={[0.05, 8, 8]} /><meshStandardMaterial color="#f9a8d4" roughness={0.8} /></mesh>
+        </group>
+      );
+    case "Mặt nạ":
+      return <mesh position={[0, 0.0, -0.215]}><boxGeometry args={[0.3, 0.24, 0.03]} /><meshStandardMaterial color="#312e81" roughness={0.5} metalness={0.4} /></mesh>;
+    case "Băng đô":
+      return <mesh position={[0, 0.2, 0]} rotation={[0.4, 0, 0]}><torusGeometry args={[0.2, 0.026, 6, 18, Math.PI]} /><meshStandardMaterial color="#a855f7" roughness={0.7} /></mesh>;
+    default:
+      return null;
+  }
+}
+
+function VoxelViewer({
+  shirtColor,
+  hairColor = "#2a1a10",
+  hairStyle,
+  accessory,
+  gender,
+  isPlaying = false,
+  isReacting = false,
+  seed = 0,
+  isFirstPerson = false,
+}: {
+  shirtColor: string;
+  hairColor?: string;
+  hairStyle?: string;
+  accessory?: string;
+  gender?: string;
+  isPlaying?: boolean;
+  isReacting?: boolean;
+  seed?: number;
+  isFirstPerson?: boolean;
+}) {
+  const groupRef = useRef<THREE.Group>(null);
+  const headRef = useRef<THREE.Group>(null);
+  const leftArmRef = useRef<THREE.Group>(null);
+  const rightArmRef = useRef<THREE.Group>(null);
+
+  useFrame((state) => {
+    if (isFirstPerson) return;
+    const t = state.clock.elapsedTime + seed;
+    // Breathing & subtle body bobbing
+    if (groupRef.current) {
+      groupRef.current.position.y = 0.45 + Math.sin(t * 1.8) * 0.007;
+    }
+    // Head animation: reacts or gently nods with movie rhythm
+    if (headRef.current) {
+      if (isReacting) {
+        headRef.current.rotation.x = Math.sin(t * 8) * 0.14;
+        headRef.current.rotation.z = Math.cos(t * 6) * 0.09;
+      } else if (isPlaying) {
+        headRef.current.rotation.x = Math.sin(t * 2.2) * 0.035;
+        headRef.current.rotation.y = Math.sin(t * 1.2) * 0.04;
+      } else {
+        headRef.current.rotation.x = Math.sin(t * 0.8) * 0.015;
+        headRef.current.rotation.y = Math.sin(t * 0.5) * 0.02;
+      }
+    }
+    // Arms cheering or clapping during reaction
+    if (leftArmRef.current && rightArmRef.current) {
+      if (isReacting) {
+        leftArmRef.current.rotation.x = -1.1 + Math.sin(t * 10) * 0.35;
+        rightArmRef.current.rotation.x = -1.1 + Math.cos(t * 10) * 0.35;
+      } else {
+        leftArmRef.current.rotation.x = Math.sin(t * 1.4) * 0.03;
+        rightArmRef.current.rotation.x = Math.sin(t * 1.4) * 0.03;
+      }
+    }
+  });
+
+  // In first-person audience view (camera at head level looking forward),
+  // hide head and chest to prevent any field-of-view clipping while keeping
+  // lower legs and popcorn tub visible if looking down!
+  if (isFirstPerson) {
+    return (
+      <group position={[0, 0.45, 0]}>
+        {gender === "female" ? (
+          <mesh position={[0, 0.17, 0.3]}>
+            <cylinderGeometry args={[0.14, 0.29, 0.36, 12]} />
+            <meshStandardMaterial color={shirtColor} roughness={0.7} />
+          </mesh>
+        ) : (
+          <>
+            <RoundedBox position={[-0.11, 0.08, 0.34]} args={[0.14, 0.17, 0.66]} radius={0.06} smoothness={3}>
+              <meshStandardMaterial color="#252638" roughness={0.85} />
+            </RoundedBox>
+            <RoundedBox position={[0.11, 0.08, 0.34]} args={[0.14, 0.17, 0.66]} radius={0.06} smoothness={3}>
+              <meshStandardMaterial color="#252638" roughness={0.85} />
+            </RoundedBox>
+          </>
+        )}
+        <group position={[0, 0.22, 0.3]}>
+          <mesh rotation={[0, 0, 0]}>
+            <cylinderGeometry args={[0.07, 0.05, 0.14, 12]} />
+            <meshStandardMaterial color="#ef4444" roughness={0.5} />
+          </mesh>
+          <mesh position={[0, 0.07, 0]}>
+            <sphereGeometry args={[0.065, 8, 8]} />
+            <meshStandardMaterial color="#fef08a" roughness={0.9} />
+          </mesh>
+        </group>
+      </group>
+    );
+  }
+
   return (
-    <group position={[0, 0.45, 0]}>
+    <group ref={groupRef} position={[0, 0.45, 0]}>
+      {/* Torso */}
       <RoundedBox position={[0, 0.35, 0]} args={[0.42, 0.44, 0.3]} radius={0.08} smoothness={3}>
         <meshStandardMaterial color={shirtColor} roughness={0.7} />
       </RoundedBox>
-      <RoundedBox position={[-0.11, 0.08, 0.34]} args={[0.14, 0.17, 0.66]} radius={0.06} smoothness={3}>
-        <meshStandardMaterial color="#252638" roughness={0.85} />
-      </RoundedBox>
-      <RoundedBox position={[0.11, 0.08, 0.34]} args={[0.14, 0.17, 0.66]} radius={0.06} smoothness={3}>
-        <meshStandardMaterial color="#252638" roughness={0.85} />
-      </RoundedBox>
+      {/* Legs (pants) or a skirt for female avatars */}
+      {gender === "female" ? (
+        <mesh position={[0, 0.17, 0.3]}>
+          <cylinderGeometry args={[0.14, 0.29, 0.36, 12]} />
+          <meshStandardMaterial color={shirtColor} roughness={0.7} />
+        </mesh>
+      ) : (
+        <>
+          <RoundedBox position={[-0.11, 0.08, 0.34]} args={[0.14, 0.17, 0.66]} radius={0.06} smoothness={3}>
+            <meshStandardMaterial color="#252638" roughness={0.85} />
+          </RoundedBox>
+          <RoundedBox position={[0.11, 0.08, 0.34]} args={[0.14, 0.17, 0.66]} radius={0.06} smoothness={3}>
+            <meshStandardMaterial color="#252638" roughness={0.85} />
+          </RoundedBox>
+        </>
+      )}
+      {/* Shoes */}
       <RoundedBox position={[-0.11, 0.08, 0.69]} args={[0.15, 0.13, 0.25]} radius={0.05} smoothness={3}>
         <meshStandardMaterial color="#11111a" roughness={0.75} />
       </RoundedBox>
       <RoundedBox position={[0.11, 0.08, 0.69]} args={[0.15, 0.13, 0.25]} radius={0.05} smoothness={3}>
         <meshStandardMaterial color="#11111a" roughness={0.75} />
       </RoundedBox>
-      {/* Big round chibi head sitting right on the torso, choigivui-style:
-          head diameter roughly equals the torso width, peach skin, and a
-          dark-brown bowl hair cap tipped toward the back of the head. */}
-      <mesh position={[0, 0.79, 0.02]}>
-        <sphereGeometry args={[0.205, 20, 16]} />
-        <meshStandardMaterial color="#ffd9b3" roughness={0.8} />
-      </mesh>
-      <mesh position={[0, 0.9, 0.03]} rotation={[0.3, 0, 0]}>
-        <sphereGeometry args={[0.208, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2]} />
-        <meshStandardMaterial color={hairColor} roughness={0.9} />
-      </mesh>
-      <mesh position={[-0.075, 0.8, -0.185]}>
-        <sphereGeometry args={[0.025, 8, 8]} />
-        <meshStandardMaterial color="#211a21" roughness={0.5} />
-      </mesh>
-      <mesh position={[0.075, 0.8, -0.185]}>
-        <sphereGeometry args={[0.025, 8, 8]} />
-        <meshStandardMaterial color="#211a21" roughness={0.5} />
-      </mesh>
-      <mesh position={[0, 0.74, -0.2]}>
-        <sphereGeometry args={[0.025, 8, 8]} />
-        <meshStandardMaterial color="#e7a12d" roughness={0.7} />
-      </mesh>
-      <RoundedBox position={[-0.25, 0.31, 0.03]} args={[0.1, 0.18, 0.25]} radius={0.045} smoothness={3}>
-        <meshStandardMaterial color={shirtColor} roughness={0.7} />
-      </RoundedBox>
-      <RoundedBox position={[0.25, 0.31, 0.03]} args={[0.1, 0.18, 0.25]} radius={0.045} smoothness={3}>
-        <meshStandardMaterial color={shirtColor} roughness={0.7} />
-      </RoundedBox>
+
+      {/* Big round chibi head with animated pivot */}
+      <group ref={headRef} position={[0, 0.79, 0.02]}>
+        <mesh position={[0, 0, 0]}>
+          <sphereGeometry args={[0.205, 20, 16]} />
+          <meshStandardMaterial color="#ffd9b3" roughness={0.8} />
+        </mesh>
+        <HairMesh style={hairStyle} color={hairColor} female={gender === "female"} />
+        {/* Eyes */}
+        <mesh position={[-0.075, 0.01, -0.205]}>
+          <sphereGeometry args={[0.025, 8, 8]} />
+          <meshStandardMaterial color="#211a21" roughness={0.5} />
+        </mesh>
+        <mesh position={[0.075, 0.01, -0.205]}>
+          <sphereGeometry args={[0.025, 8, 8]} />
+          <meshStandardMaterial color="#211a21" roughness={0.5} />
+        </mesh>
+        {/* Eye shine */}
+        <mesh position={[-0.068, 0.02, -0.228]}><sphereGeometry args={[0.008, 6, 6]} /><meshStandardMaterial color="#ffffff" /></mesh>
+        <mesh position={[0.082, 0.02, -0.228]}><sphereGeometry args={[0.008, 6, 6]} /><meshStandardMaterial color="#ffffff" /></mesh>
+        {/* Blush */}
+        <mesh position={[-0.125, -0.045, -0.175]}><sphereGeometry args={[0.028, 8, 8]} /><meshStandardMaterial color="#f9a8d4" transparent opacity={0.55} roughness={0.9} /></mesh>
+        <mesh position={[0.125, -0.045, -0.175]}><sphereGeometry args={[0.028, 8, 8]} /><meshStandardMaterial color="#f9a8d4" transparent opacity={0.55} roughness={0.9} /></mesh>
+        {/* Nose */}
+        <mesh position={[0, -0.05, -0.22]}>
+          <sphereGeometry args={[0.025, 8, 8]} />
+          <meshStandardMaterial color="#e7a12d" roughness={0.7} />
+        </mesh>
+        {/* Smile */}
+        <mesh position={[0, -0.09, -0.2]} rotation={[0, 0, Math.PI]}>
+          <torusGeometry args={[0.03, 0.008, 6, 12, Math.PI]} />
+          <meshStandardMaterial color="#9a3412" roughness={0.6} />
+        </mesh>
+        {/* Hat / glasses / headset — rides with the head */}
+        <AccessoryMesh name={accessory} />
+      </group>
+
+      {/* Arms & Hands with cheering capabilities */}
+      <group ref={leftArmRef} position={[-0.25, 0.35, 0.03]}>
+        <RoundedBox position={[0, -0.04, 0]} args={[0.1, 0.18, 0.25]} radius={0.045} smoothness={3}>
+          <meshStandardMaterial color={shirtColor} roughness={0.7} />
+        </RoundedBox>
+      </group>
+      <group ref={rightArmRef} position={[0.25, 0.35, 0.03]}>
+        <RoundedBox position={[0, -0.04, 0]} args={[0.1, 0.18, 0.25]} radius={0.045} smoothness={3}>
+          <meshStandardMaterial color={shirtColor} roughness={0.7} />
+        </RoundedBox>
+      </group>
+
+      {/* Mini Popcorn Tub in viewer's lap */}
+      <group position={[0, 0.22, 0.3]}>
+        <mesh rotation={[0, 0, 0]}>
+          <cylinderGeometry args={[0.07, 0.05, 0.14, 12]} />
+          <meshStandardMaterial color="#ef4444" roughness={0.5} />
+        </mesh>
+        <mesh position={[0, 0.07, 0]}>
+          <sphereGeometry args={[0.065, 8, 8]} />
+          <meshStandardMaterial color="#fef08a" roughness={0.9} />
+        </mesh>
+      </group>
     </group>
   );
 }
@@ -220,9 +572,26 @@ interface CinemaSeatProps {
   occupant?: SeatOccupant;
   dummyViewerColor?: string;
   onSelect: (label: string) => void;
+  isPlaying?: boolean;
+  isReacting?: boolean;
+  seed?: number;
+  isFirstPerson?: boolean;
 }
 
-function CinemaSeat({ x, y, z, label, isMySeat, occupant, dummyViewerColor, onSelect }: CinemaSeatProps) {
+function CinemaSeat({
+  x,
+  y,
+  z,
+  label,
+  isMySeat,
+  occupant,
+  dummyViewerColor,
+  onSelect,
+  isPlaying = false,
+  isReacting = false,
+  seed = 0,
+  isFirstPerson = false,
+}: CinemaSeatProps) {
   const [hovered, setHovered] = useState(false);
 
   // Red velvet cinema seats as seen in the reference image
@@ -300,26 +669,38 @@ function CinemaSeat({ x, y, z, label, isMySeat, occupant, dummyViewerColor, onSe
       {/* Actual Occupant OR Ambient Voxel Viewer */}
       {occupant ? (
         <>
-          <VoxelViewer shirtColor={isMySeat && !occupant.appearance?.shirtColor ? "#06b6d4" : shirtHex(occupant.appearance?.shirtColor)} />
-          <group position={[0, 0.8, 0.175]}>
-            <Suspense fallback={null}>
-              <Text
-                fontSize={occupant.displayName.length > 8 ? 0.075 : 0.095}
-                maxWidth={0.34}
-                textAlign="center"
-                color={isMySeat ? "#ffd94d" : "#ffffff"}
-                anchorX="center"
-                anchorY="middle"
-                outlineWidth={0.006}
-                outlineColor="#1a0b2e"
-              >
-                {isMySeat ? `★ ${occupant.displayName}` : occupant.displayName}
-              </Text>
-            </Suspense>
-          </group>
+          <VoxelViewer
+            shirtColor={isMySeat && !occupant.appearance?.shirtColor ? "#06b6d4" : shirtHex(occupant.appearance?.shirtColor)}
+            hairColor={HAIR_HEX[seed % HAIR_HEX.length]}
+            hairStyle={occupant.appearance?.hairStyle}
+            accessory={occupant.appearance?.accessory}
+            gender={occupant.gender}
+            isPlaying={isPlaying}
+            isReacting={isReacting}
+            seed={seed}
+            isFirstPerson={isFirstPerson}
+          />
+          {!isFirstPerson && (
+            <group position={[0, 0.8, 0.175]}>
+              <Suspense fallback={null}>
+                <Text
+                  fontSize={occupant.displayName.length > 8 ? 0.075 : 0.095}
+                  maxWidth={0.34}
+                  textAlign="center"
+                  color={isMySeat ? "#ffd94d" : "#ffffff"}
+                  anchorX="center"
+                  anchorY="middle"
+                  outlineWidth={0.006}
+                  outlineColor="#1a0b2e"
+                >
+                  {isMySeat ? `★ ${occupant.displayName}` : occupant.displayName}
+                </Text>
+              </Suspense>
+            </group>
+          )}
         </>
       ) : dummyViewerColor ? (
-        <VoxelViewer shirtColor={dummyViewerColor} />
+        <VoxelViewer shirtColor={dummyViewerColor} isPlaying={isPlaying} seed={seed} />
       ) : null}
     </group>
   );
@@ -348,51 +729,56 @@ function FloatingEmojiParticle({ emoji, x, z, startTime }: { emoji: string; x: n
   );
 }
 
-// The video player is an HTML layer that sits over the 3D screen. Keep the
-// audience camera fixed so its perspective always matches that layer: looking
-// toward the screen cannot shift or skew the projected picture.
+// Camera rig supporting wide hall overview and authentic first-person audience view
+// directly from the character's head looking at the center of the cinema screen.
 function CameraRig({ viewMode, selectedSeat, overlayElement }: { viewMode: "wide" | "audience"; selectedSeat?: string; overlayElement?: HTMLDivElement | null }) {
   const { camera, gl } = useThree();
   const targetPosition = useRef(new THREE.Vector3());
-  const basePosition = useRef(new THREE.Vector3(0, 5.2, 11.6));
+  const basePosition = useRef(new THREE.Vector3(0, 6.8, 15.5));
   const targetLookAt = useRef(new THREE.Vector3());
-  const currentLookAt = useRef(new THREE.Vector3(0, 2, -0.4));
-  const zoomTarget = useRef(0.68);
-  const zoomCurrent = useRef(0.68);
+  const currentLookAt = useRef(new THREE.Vector3(0, 3.8, -5.22));
+  const zoomTarget = useRef(1);
+  const zoomCurrent = useRef(1);
+
   const seatPose = useMemo(() => {
-    const label = selectedSeat || "F8";
-    const row = Math.max(0, "ABCDEF".indexOf(label[0] || "F"));
+    // Default to D8 (middle row, center aisle) if no seat is selected
+    const label = selectedSeat || "D8";
+    const row = Math.max(0, "ABCDEF".indexOf(label[0] || "D"));
     const col = Math.max(0, Number(label.slice(1)) - 1);
     const half = col % 8;
     const x = col < 8 ? -6.2 + half * 0.78 : 0.74 + half * 0.78;
     const z = -1.2 + row * 0.92;
     return { x, y: row * 0.16, z };
   }, [selectedSeat]);
+
   useEffect(() => {
-    const defaultZoom = viewMode === "wide" ? 0.68 : 1;
-    zoomTarget.current = defaultZoom;
-    zoomCurrent.current = defaultZoom;
     if (viewMode === "audience") {
-      // Place the POV just behind the selected seat and aim slightly below
-      // the screen center. This keeps the picture aligned with the wall while
-      // leaving the stage performers visible beneath it.
-      targetPosition.current.set(seatPose.x, seatPose.y + 1.72, seatPose.z + 3.2);
-      targetLookAt.current.set(0, 2.35, -5.22);
+      // First-person perspective directly from the head/eyes of the character in the seat
+      // looking straight ahead at the center of the cinema screen (y=3.8, z=-5.22)
+      targetPosition.current.set(seatPose.x, seatPose.y + 1.25, seatPose.z - 0.12);
+      targetLookAt.current.set(0, 3.8, -5.22);
+      zoomTarget.current = 1.0;
+      zoomCurrent.current = 1.0;
     } else {
-      // Back-of-house wide view: include the screen and all six audience rows.
-      targetPosition.current.set(0, 7.6, 16.8);
-      targetLookAt.current.set(0, 2.1, -0.6);
+      // Wide cinematic overview of the grand cinema hall
+      targetPosition.current.set(0, 6.8, 15.5);
+      targetLookAt.current.set(0, 2.4, -0.6);
+      zoomTarget.current = 0.85;
+      zoomCurrent.current = 0.85;
     }
   }, [camera, viewMode, seatPose]);
+
   useEffect(() => {
     const frame = overlayElement?.parentElement ?? gl.domElement.parentElement;
     if (!frame) return;
     let previousPinchDistance = 0;
-    const clampZoom = (value: number) => Math.max(0.45, Math.min(1.7, value));
+    // Zoom is clamped so the camera can never leave the auditorium:
+    // at zoom 1.15 the wide camera already sits near the back wall (z≈17.9 < 18.5).
+    const clampZoom = (value: number) => Math.max(0.45, Math.min(1.15, value));
     const distance = (touches: TouchList) => Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
-      zoomTarget.current = clampZoom(zoomTarget.current * (event.deltaY < 0 ? 0.9 : 1.11));
+      zoomTarget.current = clampZoom(zoomTarget.current * (event.deltaY < 0 ? 0.92 : 1.08));
     };
     const onTouchStart = (event: TouchEvent) => {
       previousPinchDistance = event.touches.length >= 2 ? distance(event.touches) : 0;
@@ -420,12 +806,23 @@ function CameraRig({ viewMode, selectedSeat, overlayElement }: { viewMode: "wide
       frame.removeEventListener("touchcancel", onTouchEnd);
     };
   }, [gl, overlayElement]);
+
   useFrame((_, delta) => {
-    const k = 1 - Math.exp(-3.2 * delta);
+    const k = 1 - Math.exp(-4.5 * delta);
     basePosition.current.lerp(targetPosition.current, k);
     currentLookAt.current.lerp(targetLookAt.current, k);
-    zoomCurrent.current += (zoomTarget.current - zoomCurrent.current) * (1 - Math.exp(-5 * delta));
-    camera.position.copy(currentLookAt.current).addScaledVector(basePosition.current.clone().sub(currentLookAt.current), zoomCurrent.current);
+    zoomCurrent.current += (zoomTarget.current - zoomCurrent.current) * (1 - Math.exp(-6 * delta));
+
+    if (viewMode === "audience") {
+      // In audience first-person view, camera directly tracks head position
+      camera.position.copy(basePosition.current);
+    } else {
+      camera.position.copy(currentLookAt.current).addScaledVector(basePosition.current.clone().sub(currentLookAt.current), zoomCurrent.current);
+    }
+    // Hard boundary clamp: walls x=±9.6, back wall z=18.5, ceiling y=9.5, screen wall z=-5.78
+    camera.position.x = Math.max(-9.3, Math.min(9.3, camera.position.x));
+    camera.position.y = Math.max(0.4, Math.min(9.3, camera.position.y));
+    camera.position.z = Math.max(-5.6, Math.min(18.2, camera.position.z));
     camera.lookAt(currentLookAt.current);
     if (overlayElement) {
       const corners = [
@@ -457,9 +854,128 @@ function CameraRig({ viewMode, selectedSeat, overlayElement }: { viewMode: "wide
   return null;
 }
 
+// Grand enclosed cinema room with acoustic walls, side wall sconces,
+// projection booth window, ceiling beams, and auditorium carpet.
+function CinemaEnclosure({ theme, isPlaying }: { theme: string; isPlaying: boolean }) {
+  const isSky = theme === "sky";
+  const isCyberpunk = theme === "cyberpunk";
+  const isSunset = theme === "sunset";
+
+  const wallColor = isSky ? "#091326" : isCyberpunk ? "#040913" : isSunset ? "#1d0b06" : "#110b1e";
+  const sconceGlow = isSky ? "#38bdf8" : isCyberpunk ? "#06b6d4" : isSunset ? "#f97316" : "#f59e0b";
+  const ceilingColor = isSky ? "#060d1c" : isCyberpunk ? "#02060e" : isSunset ? "#140603" : "#0c0817";
+  const carpetColor = isSky ? "#081022" : isCyberpunk ? "#030812" : isSunset ? "#180904" : "#0d0916";
+
+  const sconceZs = [-3.5, 1.2, 5.8, 10.5, 15.2];
+
+  return (
+    <group>
+      {/* 1. Entire Auditorium Floor Carpet */}
+      <mesh position={[0, -0.15, 6.2]}>
+        <boxGeometry args={[19.6, 0.12, 24.8]} />
+        <meshStandardMaterial color={carpetColor} roughness={0.92} />
+      </mesh>
+
+      {/* 2. Left Enclosing Wall */}
+      <mesh position={[-9.6, 4.6, 6.2]}>
+        <boxGeometry args={[0.3, 10.0, 24.8]} />
+        <meshStandardMaterial color={wallColor} roughness={0.88} />
+      </mesh>
+
+      {/* Left Wall Acoustic Trim Panels & Warm Cinema Sconces */}
+      {sconceZs.map((z, idx) => (
+        <group key={`left-trim-${idx}`} position={[-9.42, 4.6, z]}>
+          <mesh position={[0, 0, 0]}>
+            <boxGeometry args={[0.08, 8.5, 1.8]} />
+            <meshStandardMaterial color={isCyberpunk ? "#081626" : isSunset ? "#2a120a" : "#19112a"} roughness={0.8} />
+          </mesh>
+          <mesh position={[0.08, -0.8, 0]}>
+            <boxGeometry args={[0.08, 0.65, 0.18]} />
+            <meshStandardMaterial color="#2d2538" metalness={0.7} roughness={0.3} />
+          </mesh>
+          <mesh position={[0.12, -0.8, 0]}>
+            <boxGeometry args={[0.06, 0.42, 0.14]} />
+            <meshStandardMaterial color={sconceGlow} emissive={sconceGlow} emissiveIntensity={isPlaying ? 1.4 : 2.8} />
+          </mesh>
+          <pointLight position={[0.4, -0.8, 0]} intensity={isPlaying ? 4 : 10} color={sconceGlow} distance={7} />
+        </group>
+      ))}
+
+      {/* 3. Right Enclosing Wall */}
+      <mesh position={[9.6, 4.6, 6.2]}>
+        <boxGeometry args={[0.3, 10.0, 24.8]} />
+        <meshStandardMaterial color={wallColor} roughness={0.88} />
+      </mesh>
+
+      {/* Right Wall Acoustic Trim Panels & Warm Cinema Sconces */}
+      {sconceZs.map((z, idx) => (
+        <group key={`right-trim-${idx}`} position={[9.42, 4.6, z]}>
+          <mesh position={[0, 0, 0]}>
+            <boxGeometry args={[0.08, 8.5, 1.8]} />
+            <meshStandardMaterial color={isCyberpunk ? "#081626" : isSunset ? "#2a120a" : "#19112a"} roughness={0.8} />
+          </mesh>
+          <mesh position={[-0.08, -0.8, 0]}>
+            <boxGeometry args={[0.08, 0.65, 0.18]} />
+            <meshStandardMaterial color="#2d2538" metalness={0.7} roughness={0.3} />
+          </mesh>
+          <mesh position={[-0.12, -0.8, 0]}>
+            <boxGeometry args={[0.06, 0.42, 0.14]} />
+            <meshStandardMaterial color={sconceGlow} emissive={sconceGlow} emissiveIntensity={isPlaying ? 1.4 : 2.8} />
+          </mesh>
+          <pointLight position={[-0.4, -0.8, 0]} intensity={isPlaying ? 4 : 10} color={sconceGlow} distance={7} />
+        </group>
+      ))}
+
+      {/* 4. Back Wall Behind Audience */}
+      <mesh position={[0, 4.6, 18.5]}>
+        <boxGeometry args={[19.6, 10.0, 0.3]} />
+        <meshStandardMaterial color={wallColor} roughness={0.88} />
+      </mesh>
+
+      {/* Projection Booth Window on Back Wall */}
+      <group position={[0, 6.2, 18.32]}>
+        <mesh>
+          <boxGeometry args={[2.8, 1.4, 0.16]} />
+          <meshStandardMaterial color="#0c0914" metalness={0.8} roughness={0.2} />
+        </mesh>
+        <mesh position={[0, 0, -0.09]}>
+          <planeGeometry args={[2.4, 1.0]} />
+          <meshBasicMaterial color={isCyberpunk ? "#06b6d4" : isSky ? "#38bdf8" : "#e0e7ff"} />
+        </mesh>
+        <pointLight position={[0, 0, -0.4]} intensity={isPlaying ? 24 : 12} color="#e0e7ff" distance={16} />
+      </group>
+
+      {/* 5. Cinema Ceiling */}
+      {isSky ? (
+        // For Sky Theme: Roof perimeter with open skylight to view the 2,600 stars above
+        <group position={[0, 9.5, 6.2]}>
+          <mesh position={[-7.2, 0, 0]}><boxGeometry args={[5.2, 0.25, 24.8]} /><meshStandardMaterial color={ceilingColor} roughness={0.9} /></mesh>
+          <mesh position={[7.2, 0, 0]}><boxGeometry args={[5.2, 0.25, 24.8]} /><meshStandardMaterial color={ceilingColor} roughness={0.9} /></mesh>
+          <mesh position={[0, 0, -10.0]}><boxGeometry args={[9.4, 0.25, 5.0]} /><meshStandardMaterial color={ceilingColor} roughness={0.9} /></mesh>
+          <mesh position={[0, 0, 10.0]}><boxGeometry args={[9.4, 0.25, 5.0]} /><meshStandardMaterial color={ceilingColor} roughness={0.9} /></mesh>
+        </group>
+      ) : (
+        // Full enclosed cinema coffer ceiling
+        <group position={[0, 9.5, 6.2]}>
+          <mesh position={[0, 0, 0]}>
+            <boxGeometry args={[19.6, 0.25, 24.8]} />
+            <meshStandardMaterial color={ceilingColor} roughness={0.9} />
+          </mesh>
+          {/* Architectural Ceiling Beams */}
+          {[-8, -2, 4, 10, 16].map((bz) => (
+            <mesh key={`beam-${bz}`} position={[0, -0.2, bz - 6.2]}>
+              <boxGeometry args={[19.4, 0.35, 0.6]} />
+              <meshStandardMaterial color={isCyberpunk ? "#061222" : isSunset ? "#240e06" : "#170f26"} roughness={0.8} />
+            </mesh>
+          ))}
+        </group>
+      )}
+    </group>
+  );
+}
+
 export function TheaterScene({
   viewMode = "wide",
-  currentUserId,
   selectedSeat,
   occupiedSeats,
   isPlaying,
@@ -467,10 +983,22 @@ export function TheaterScene({
   recentReactions = [],
   onSelectSeat,
   quality = "high",
-  laserFlash = false
-  , overlayElement
+  overlayElement
 }: TheaterSceneProps) {
   const isSky = theme === "sky";
+  const isCyberpunk = theme === "cyberpunk";
+  const isSunset = theme === "sunset";
+
+  const bgColor = isSky ? "#0a1233" : isCyberpunk ? "#020712" : isSunset ? "#1a0804" : "#080612";
+  const ambientLightColor = isSky ? "#93c5fd" : isCyberpunk ? "#06b6d4" : isSunset ? "#fdba74" : "#ffffff";
+  const mainPointColor = isSky ? "#38bdf8" : isCyberpunk ? "#06b6d4" : isSunset ? "#f97316" : "#c084fc";
+  const sidePointColor = isSky ? "#60a5fa" : isCyberpunk ? "#f43f5e" : isSunset ? "#fbbf24" : "#f59e0b";
+  const stageNeon1 = isSky ? "#38bdf8" : isCyberpunk ? "#06b6d4" : isSunset ? "#fb923c" : "#c084fc";
+  const stageNeon2 = isSky ? "#1d4ed8" : isCyberpunk ? "#ec4899" : isSunset ? "#ea580c" : "#7c3aed";
+  const aisleAccentColor = isSky ? "#38bdf8" : isCyberpunk ? "#06b6d4" : isSunset ? "#f59e0b" : "#c49a38";
+  const aisleAccentColor2 = isSky ? "#7dd3fc" : isCyberpunk ? "#67e8f9" : isSunset ? "#fed7aa" : "#f4d477";
+  const curtainColor = isSky ? "#1e293b" : isCyberpunk ? "#0f172a" : isSunset ? "#451a03" : "#3b0764";
+
   const rowLabels = ["A", "B", "C", "D", "E", "F"];
   const seatsPerRow = 16;
   const seats = useMemo(() => {
@@ -487,7 +1015,12 @@ export function TheaterScene({
         const label = `${rowLabels[row]}${col + 1}`;
 
         const isMySeat = selectedSeat === label;
+        const isFirstPerson = isMySeat && viewMode === "audience";
         const occupant = occupiedSeats[label];
+        const isReacting = Boolean(
+          occupant && recentReactions.some((r) => r.userName === occupant.displayName && Date.now() - r.timestamp < 3500)
+        );
+        const seed = row * 16 + col;
 
         list.push(
           <CinemaSeat
@@ -499,43 +1032,48 @@ export function TheaterScene({
             isMySeat={isMySeat}
             occupant={occupant}
             onSelect={(l) => onSelectSeat?.(l)}
+            isPlaying={isPlaying}
+            isReacting={isReacting}
+            seed={seed}
+            isFirstPerson={isFirstPerson}
           />
         );
       }
     }
     return list;
-  }, [selectedSeat, occupiedSeats, onSelectSeat]);
+  }, [selectedSeat, occupiedSeats, onSelectSeat, isPlaying, recentReactions, viewMode]);
 
   return (
     <Canvas
-      camera={{ position: [0, 5.2, 11.6], fov: 46 }}
+      camera={{ position: [0, 6.8, 15.5], fov: 46 }}
       dpr={quality === "low" ? 0.75 : quality === "medium" ? 1 : 1.5}
       gl={{ antialias: true, alpha: false }}
     >
-      <color attach="background" args={[isSky ? "#0a1233" : "#080612"]} />
+      <color attach="background" args={[bgColor]} />
       <CameraRig viewMode={viewMode} selectedSeat={selectedSeat} overlayElement={overlayElement} />
+      <CinemaEnclosure theme={theme} isPlaying={isPlaying} />
       {isSky && <Stars radius={70} depth={35} count={2600} factor={3.2} saturation={0} fade speed={0.6} />}
+      {isCyberpunk && <Stars radius={60} depth={20} count={1400} factor={4} saturation={1} fade speed={1.2} />}
+      {isSunset && <Stars radius={80} depth={30} count={800} factor={2} saturation={0.8} fade speed={0.4} />}
 
       {/* Lighting */}
-      <ambientLight intensity={isPlaying ? 0.35 : 0.75} />
-      <pointLight position={[0, 4.5, -4]} intensity={isPlaying ? 45 : 25} color="#c084fc" distance={20} />
-      <pointLight position={[-6, 3, 0]} intensity={18} color="#f59e0b" distance={12} />
-      <pointLight position={[6, 3, 0]} intensity={18} color="#f59e0b" distance={12} />
-      {laserFlash && <><pointLight position={[-5, 6.4, -2]} color="#22d3ee" intensity={34} distance={16} /><pointLight position={[5, 6.4, -2]} color="#e879f9" intensity={34} distance={16} /></>}
-
+      <ambientLight intensity={isPlaying ? 0.35 : 0.75} color={ambientLightColor} />
+      <pointLight position={[0, 4.5, -4]} intensity={isPlaying ? 45 : 25} color={mainPointColor} distance={20} />
+      <pointLight position={[-6, 3, 0]} intensity={18} color={sidePointColor} distance={12} />
+      <pointLight position={[6, 3, 0]} intensity={18} color={sidePointColor} distance={12} />
       {/* Stage Floor */}
       <mesh position={[0, -0.05, -3.4]}>
         <boxGeometry args={[14, 0.2, 3.2]} />
-        <meshStandardMaterial color="#130e20" roughness={0.8} />
+        <meshStandardMaterial color={isCyberpunk ? "#061320" : "#130e20"} roughness={0.8} />
       </mesh>
-      {/* Purple neon strip along the stage front edge, like the mockup */}
+      {/* Neon strip along the stage front edge */}
       <mesh position={[0, 0.075, -1.8]}>
         <boxGeometry args={[13.8, 0.05, 0.07]} />
-        <meshBasicMaterial color="#c084fc" />
+        <meshBasicMaterial color={stageNeon1} />
       </mesh>
       <mesh position={[0, -0.03, -1.79]}>
         <boxGeometry args={[13.8, 0.06, 0.05]} />
-        <meshBasicMaterial color="#7c3aed" />
+        <meshBasicMaterial color={stageNeon2} />
       </mesh>
 
       {/* Three viewers dancing on stage spots, choigivui-style */}
@@ -555,34 +1093,30 @@ export function TheaterScene({
             </mesh>
             <mesh position={[0, rowY + 0.012, aisleZ]}>
               <boxGeometry args={[0.82, 0.024, 0.9]} />
-              <meshBasicMaterial color="#c49a38" />
+              <meshBasicMaterial color={aisleAccentColor} />
             </mesh>
             <mesh position={[-0.43, rowY + 0.02, aisleZ]}>
               <boxGeometry args={[0.035, 0.03, 0.9]} />
-              <meshBasicMaterial color="#f4d477" />
+              <meshBasicMaterial color={aisleAccentColor2} />
             </mesh>
             <mesh position={[0.43, rowY + 0.02, aisleZ]}>
               <boxGeometry args={[0.035, 0.03, 0.9]} />
-              <meshBasicMaterial color="#f4d477" />
+              <meshBasicMaterial color={aisleAccentColor2} />
             </mesh>
             {/* Glowing step bar across the aisle at each tier lip */}
             <mesh position={[0, rowY + 0.028, aisleZ + 0.42]}>
               <boxGeometry args={[0.68, 0.028, 0.09]} />
-              <meshBasicMaterial color="#f4d477" />
+              <meshBasicMaterial color={aisleAccentColor2} />
             </mesh>
           </group>
         );
       })}
 
-      {/* Rear wall and wall-mounted cinema screen. The player is aligned with
-          this fixed frame by the locked audience camera above. */}
+      {/* Rear wall and wall-mounted cinema screen. */}
       <mesh position={[0, 3.35, -5.78]}>
         <boxGeometry args={[14, 7.6, 0.35]} />
         <meshStandardMaterial color="#100c1d" roughness={0.92} />
       </mesh>
-      {/* A compact wall-mounted bezel: four solid 3D rails sit around the
-          projection plane. This makes the screen read as hardware attached to
-          the back wall rather than a floating HTML rectangle. */}
       <mesh position={[0, 3.8, -5.42]}>
         <boxGeometry args={[10.42, 6.12, 0.42]} />
         <meshStandardMaterial color="#090710" metalness={0.48} roughness={0.42} />
@@ -604,7 +1138,7 @@ export function TheaterScene({
         <meshStandardMaterial color="#08090d" metalness={0.48} roughness={0.42} emissive="#020204" emissiveIntensity={0.08} />
       </mesh>
 
-      {/* Inner screen surface (16:9) — the HTML video player overlays exactly here */}
+      {/* Inner screen surface (16:9) */}
       <mesh position={[0, 3.8, -5.22]}>
         <planeGeometry args={[9.81, 5.5]} />
         <meshBasicMaterial color={isPlaying ? "#0a0a18" : "#05050e"} />
@@ -612,19 +1146,19 @@ export function TheaterScene({
       {/* Screen glow spill onto the stage */}
       <pointLight position={[0, 3.4, -3.6]} intensity={isPlaying ? 30 : 14} color="#a5b4fc" distance={11} />
 
-      {/* Left Stage Velvet Curtain */}
+      {/* Left Stage Curtain */}
       <mesh position={[-5.95, 3.8, -4.9]}>
         <boxGeometry args={[1.4, 7.0, 0.8]} />
-        <meshStandardMaterial color="#3b0764" roughness={0.9} />
+        <meshStandardMaterial color={curtainColor} roughness={0.9} />
       </mesh>
 
-      {/* Right Stage Velvet Curtain */}
+      {/* Right Stage Curtain */}
       <mesh position={[5.95, 3.8, -4.9]}>
         <boxGeometry args={[1.4, 7.0, 0.8]} />
-        <meshStandardMaterial color="#3b0764" roughness={0.9} />
+        <meshStandardMaterial color={curtainColor} roughness={0.9} />
       </mesh>
 
-      {/* Warm uplights at the curtain bases, like the mockup */}
+      {/* Warm uplights at the curtain bases */}
       <mesh position={[-5.95, 0.16, -4.35]}>
         <boxGeometry args={[0.55, 0.32, 0.28]} />
         <meshStandardMaterial color="#f59e0b" emissive="#fb923c" emissiveIntensity={2.2} />
@@ -635,18 +1169,6 @@ export function TheaterScene({
       </mesh>
       <pointLight position={[-5.9, 0.6, -4.1]} intensity={7} color="#fb923c" distance={5} />
       <pointLight position={[5.9, 0.6, -4.1]} intensity={7} color="#fb923c" distance={5} />
-
-      {/* Left Wall Sconce Light Fixture */}
-      <mesh position={[-6.8, 2.8, -1.5]}>
-        <boxGeometry args={[0.15, 0.9, 0.2]} />
-        <meshStandardMaterial color="#d97706" emissive="#f59e0b" emissiveIntensity={1.8} />
-      </mesh>
-
-      {/* Right Wall Sconce Light Fixture */}
-      <mesh position={[6.8, 2.8, -1.5]}>
-        <boxGeometry args={[0.15, 0.9, 0.2]} />
-        <meshStandardMaterial color="#d97706" emissive="#f59e0b" emissiveIntensity={1.8} />
-      </mesh>
 
       {/* Auditorium Seats & Audience */}
       {seats}

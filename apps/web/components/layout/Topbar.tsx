@@ -6,13 +6,11 @@ import { useRouter } from "next/navigation";
 
 interface TopbarProps {
   currentUser?: { displayName?: string; avatarUrl?: string } | null;
-  onLogout?: () => void;
   onProfileClick?: () => void;
 }
 
 export default function Topbar({
   currentUser,
-  onLogout,
   onProfileClick,
 }: TopbarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);

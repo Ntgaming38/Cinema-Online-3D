@@ -48,7 +48,8 @@ export async function POST(request: NextRequest) {
       username: user.username,
       displayName: user.displayName,
       avatarUrl: user.avatarUrl,
-      isGuest: !user.username
+      isGuest: !user.username,
+      gender: user.gender ?? null
     };
 
     const token = signAuthToken(tokenPayload);

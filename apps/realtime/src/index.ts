@@ -63,6 +63,7 @@ interface AuthUser {
   displayName: string;
   avatarUrl?: string | null;
   isGuest: boolean;
+  gender?: string | null;
 }
 
 interface RoomUserRecord {
@@ -71,6 +72,7 @@ interface RoomUserRecord {
   role: "OWNER" | "MODERATOR" | "MEMBER";
   sockets: Set<string>;
   seatLabel?: string;
+  gender?: string | null;
 }
 
 interface PlaybackMemory {
@@ -119,10 +121,32 @@ function getLevel(exp: number): number {
 
 // roomCode -> Map(userId -> { shirtColor?, hairStyle?, accessory? })
 const roomAppearance = new Map<string, Map<string, { shirtColor?: string; hairStyle?: string; accessory?: string }>>();
+
+// Wardrobe catalogs shared by validation and random seeding (must match the web CharacterPanel).
+const WARDROBE_SHIRTS = ["Đen", "Xám", "Trắng", "Vàng", "Đỏ", "Tím", "Cam", "Xanh lá", "Xanh dương", "Hồng", "Nâu"];
+const WARDROBE_HAIRS = ["Tóc ngắn", "Tóc dài", "Tóc búi", "Tóc xoăn", "Tóc vuốt", "Tóc mái", "Tóc 2 bím", "Tóc dài thẳng", "Tóc tém", "Tóc chỏm", "Tóc undercut", "Đầu hói", "Tóc bob", "Tóc dài xoăn", "Tóc mohawk", "Tóc đuôi ngựa", "Tóc bím lệch"];
+const WARDROBE_ACCS = ["Kính", "Mũ", "Tai nghe", "Vương miện", "Nơ", "Kính râm", "Mũ len", "Mũ lưỡi trai", "Mũ bảo helmet", "Mũ hoa", "Mũ phù thủy", "Mũ tai mèo", "Tai mèo", "Sừng quỷ", "Halo", "Bông tai", "Mặt nạ", "Băng đô", "Kính 3D", "Băng đô tai mèo", "Không"];
+const MALE_HAIRS = ["Tóc undercut", "Tóc vuốt", "Tóc ngắn", "Tóc xoăn", "Tóc tém"];
+const FEMALE_HAIRS = ["Tóc dài thẳng", "Tóc dài xoăn", "Tóc đuôi ngựa", "Tóc bob", "Tóc 2 bím"];
+const MALE_SHIRTS = ["Xanh dương", "Đen", "Xám", "Trắng", "Xanh lá"];
+const FEMALE_SHIRTS = ["Hồng", "Tím", "Trắng", "Vàng", "Cam"];
+const MALE_ACCS = ["Kính 3D", "Tai nghe", "Mũ lưỡi trai", "Không"];
+const FEMALE_ACCS = ["Kính 3D", "Tai nghe", "Băng đô tai mèo", "Không"];
+const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
+function randomAppearance(gender?: string | null): { shirtColor: string; hairStyle: string; accessory: string } {
+  const fem = gender === "female";
+  return {
+    shirtColor: pick(fem ? FEMALE_SHIRTS : MALE_SHIRTS),
+    hairStyle: pick(fem ? FEMALE_HAIRS : MALE_HAIRS),
+    accessory: pick(fem ? FEMALE_ACCS : MALE_ACCS),
+  };
+}
 // roomCode -> Map(userId -> { chatCount, lastCheckinDate, watchHeartbeatAt, watchMinutes })
 const roomMissionStats = new Map<string, Map<string, { chatCount: number; lastCheckinDate: string; watchHeartbeatAt: number; watchMinutes: number }>>();
 // roomCode -> { skipVotes: Set<string> }
 const roomSkipVotes = new Map<string, { skipVotes: Set<string> }>();
+// roomCode -> Map<itemId, Set<userId>>
+const roomQueueVotes = new Map<string, Map<string, Set<string>>>();
 // roomCode -> video queue items (memory mirror of DB)
 const roomVideoQueue = new Map<string, Array<{
   id: string;
@@ -133,10 +157,15 @@ const roomVideoQueue = new Map<string, Array<{
   addedBy: string;
   addedByName: string;
   createdAt: number;
+  votes?: number;
 }>>();
 // roomCode -> projected image info
 const roomProjectedImage = new Map<string, { url: string; setBy: string; setByName: string; setAt: number } | null>();
 const roomDisco = new Map<string, boolean>();
+
+function getQueueItemVotes(code: string, itemId: string): number {
+  return roomQueueVotes.get(code)?.get(itemId)?.size || 0;
+}
 
 async function ensureMission(userId: string, roomId: string, missionKey: string) {
   const def = MISSION_DEFS[missionKey];
@@ -250,6 +279,7 @@ function broadcastPresence(code: string) {
     avatarUrl: rec.avatarUrl,
     role: rec.role,
     seatLabel: rec.seatLabel,
+    gender: rec.gender,
     appearance: appMap?.get(uId),
   }));
   io.to(code).emit("room:presence", { count: usersMap.size, members: membersList });
@@ -270,6 +300,7 @@ async function loadRoomQueue(code: string, roomDbId: string) {
     addedBy: i.addedById,
     addedByName: i.addedBy.displayName,
     createdAt: i.createdAt.getTime(),
+    votes: getQueueItemVotes(code, i.id),
   }));
   roomVideoQueue.set(code, queue);
   return queue;
@@ -439,7 +470,8 @@ io.on("connection", (socket: Socket) => {
           displayName: user.displayName,
           avatarUrl: user.avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.userId}`,
           role,
-          sockets: new Set()
+          sockets: new Set(),
+          gender: user.gender ?? null
         };
         usersMap.set(user.userId, userRecord);
 
@@ -506,26 +538,35 @@ io.on("connection", (socket: Socket) => {
         userRole: role
       });
 
-      // Seed the user's saved appearance (shirt/hair/accessory) so presence carries it
-      if (!user.isGuest) {
-        try {
-          const dbUser = await prisma.user.findUnique({
-            where: { id: user.userId },
-            select: { shirtColor: true, hairStyle: true, accessory: true },
-          });
-          if (dbUser && (dbUser.shirtColor || dbUser.hairStyle || dbUser.accessory)) {
-            let appMap = roomAppearance.get(code);
-            if (!appMap) { appMap = new Map(); roomAppearance.set(code, appMap); }
-            if (!appMap.has(user.userId)) {
-              appMap.set(user.userId, {
-                shirtColor: dbUser.shirtColor || undefined,
-                hairStyle: dbUser.hairStyle || undefined,
-                accessory: dbUser.accessory || undefined,
-              });
+      // Seed appearance so presence carries it: the saved choice for logged-in
+      // users, a randomized outfit for guests (and users without a saved look).
+      try {
+        let appMap = roomAppearance.get(code);
+        if (!appMap) { appMap = new Map(); roomAppearance.set(code, appMap); }
+        if (!appMap.has(user.userId)) {
+          let appearance: { shirtColor?: string; hairStyle?: string; accessory?: string } | undefined;
+          let gender: string | null | undefined = user.gender;
+          if (!user.isGuest) {
+            const dbUser = await prisma.user.findUnique({
+              where: { id: user.userId },
+              select: { shirtColor: true, hairStyle: true, accessory: true, gender: true },
+            });
+            if (dbUser) {
+              gender = dbUser.gender ?? gender;
+              const rec0 = usersMap.get(user.userId);
+              if (rec0 && dbUser.gender) rec0.gender = dbUser.gender;
+              if (dbUser.shirtColor || dbUser.hairStyle || dbUser.accessory) {
+                appearance = {
+                  shirtColor: dbUser.shirtColor || undefined,
+                  hairStyle: dbUser.hairStyle || undefined,
+                  accessory: dbUser.accessory || undefined,
+                };
+              }
             }
           }
-        } catch {}
-      }
+          appMap.set(user.userId, appearance ?? randomAppearance(gender));
+        }
+      } catch {}
 
       // Broadcast presence (unique users count, incl. appearance)
       broadcastPresence(code);
@@ -950,12 +991,48 @@ io.on("connection", (socket: Socket) => {
       addedBy: item.addedById,
       addedByName: item.addedBy.displayName,
       createdAt: item.createdAt.getTime(),
+      votes: 0,
     };
     const q = roomVideoQueue.get(code) || [];
     q.push(queueItem);
     roomVideoQueue.set(code, q);
     io.to(code).emit("video:queue:update", { queue: q });
     // Mission "Gửi video hay" is credited on APPROVAL (see video:approve), not on submission.
+  });
+
+  // ==================== VIDEO QUEUE VOTE ====================
+  socket.on("video:queue:vote", async ({ itemId }: { itemId: string }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    const userId = user.userId;
+    if (!code || !itemId) return;
+
+    let itemVotesMap = roomQueueVotes.get(code);
+    if (!itemVotesMap) {
+      itemVotesMap = new Map();
+      roomQueueVotes.set(code, itemVotesMap);
+    }
+
+    let voters = itemVotesMap.get(itemId);
+    if (!voters) {
+      voters = new Set();
+      itemVotesMap.set(itemId, voters);
+    }
+
+    const hasVoted = voters.has(userId);
+    if (hasVoted) {
+      voters.delete(userId);
+    } else {
+      voters.add(userId);
+    }
+
+    const q = (roomVideoQueue.get(code) || []).map(i => ({
+      ...i,
+      votes: getQueueItemVotes(code, i.id),
+    }));
+    roomVideoQueue.set(code, q);
+
+    io.to(code).emit("video:queue:update", { queue: q });
+    socket.emit("app:notice", { message: hasVoted ? "Đã hủy bình chọn video." : "Đã bình chọn cho video!" });
   });
 
   socket.on("video:approve", async ({ itemId, action }: { itemId: string; action: "approve" | "reject" }) => {
@@ -981,7 +1058,7 @@ io.on("connection", (socket: Socket) => {
       data: { status: newStatus, approvedById: userId, approvedAt: new Date() },
       include: { addedBy: { select: { displayName: true } } },
     });
-    const q = (roomVideoQueue.get(code) || []).map(i => (i.id === itemId ? { ...i, status: newStatus } : i));
+    const q = (roomVideoQueue.get(code) || []).map(i => (i.id === itemId ? { ...i, status: newStatus, votes: getQueueItemVotes(code, i.id) } : i));
     roomVideoQueue.set(code, q);
     io.to(code).emit("video:queue:update", { queue: q });
     io.to(code).emit("chat:message", {
@@ -1026,19 +1103,33 @@ io.on("connection", (socket: Socket) => {
     const totalViewers = usersMap.size;
     if (totalViewers === 0) return;
     const votes = roomSkipVotes.get(code) || { skipVotes: new Set() };
-    votes.skipVotes.add(userId);
+    
+    let isVoted = false;
+    if (votes.skipVotes.has(userId)) {
+      votes.skipVotes.delete(userId);
+      isVoted = false;
+      socket.emit("app:notice", { message: "Đã hủy bình chọn bỏ qua video." });
+    } else {
+      votes.skipVotes.add(userId);
+      isVoted = true;
+      socket.emit("app:notice", { message: "Đã bình chọn bỏ qua video!" });
+    }
     roomSkipVotes.set(code, votes);
-    const ratio = votes.skipVotes.size / totalViewers;
+    const ratio = totalViewers > 0 ? votes.skipVotes.size / totalViewers : 0;
     io.to(code).emit("vote:skip:update", { votes: votes.skipVotes.size, total: totalViewers, ratio });
+
     if (ratio >= 0.35) {
-      // Threshold reached: actually switch playback to the next APPROVED item.
+      // Threshold reached: switch playback to the next APPROVED item (highest votes first)
       roomSkipVotes.set(code, { skipVotes: new Set() });
       io.to(code).emit("vote:skip:update", { votes: 0, total: totalViewers, ratio: 0 });
       const roomDbId = await resolveRoomDbId(code);
       if (!roomDbId) return;
       let q = roomVideoQueue.get(code) || [];
       if (!q.some(i => i.status === "APPROVED")) q = await loadRoomQueue(code, roomDbId);
-      const next = q.find(i => i.status === "APPROVED");
+      const approvedItems = q.filter(i => i.status === "APPROVED");
+      // Sort approved items by votes descending, then oldest
+      approvedItems.sort((a, b) => (b.votes || 0) - (a.votes || 0));
+      const next = approvedItems[0];
       if (next) {
         io.to(code).emit("vote:skip:result", { next });
         const full = await prisma.videoQueueItem.findUnique({ where: { id: next.id }, include: { addedBy: { select: { displayName: true } } } });
@@ -1060,14 +1151,11 @@ io.on("connection", (socket: Socket) => {
     const code = socketMeta.get(socket.id)?.roomCode;
     const userId = user.userId;
     if (!code) return;
-    // Validate against the wardrobe lists (Vietnamese names) or a hex color.
-    const SHIRTS = ["Đen", "Xám", "Trắng", "Vàng", "Đỏ", "Tím", "Cam", "Xanh lá", "Xanh dương", "Hồng", "Nâu"];
-    const HAIRS = ["Tóc ngắn", "Tóc dài", "Tóc búi", "Tóc xoăn", "Tóc vuốt", "Tóc mái", "Tóc 2 bím", "Tóc dài thẳng", "Tóc tém", "Tóc chỏm", "Tóc undercut", "Đầu hói", "Tóc bob", "Tóc dài xoăn", "Tóc mohawk", "Tóc đuôi ngựa", "Tóc bím lệch"];
-    const ACCS = ["Kính", "Mũ", "Tai nghe", "Vương miện", "Nơ", "Kính râm", "Mũ len", "Mũ lưỡi trai", "Mũ bảo hiểm", "Mũ hoa", "Mũ phù thủy", "Mũ tai mèo", "Tai mèo", "Sừng quỷ", "Halo", "Bông tai", "Mặt nạ", "Băng đô"];
+    // Validate against the shared wardrobe lists (Vietnamese names) or a hex color.
     const clean = {
-      shirtColor: shirtColor && (SHIRTS.includes(shirtColor) || /^#[0-9a-fA-F]{6}$/.test(shirtColor)) ? shirtColor : undefined,
-      hairStyle: hairStyle && HAIRS.includes(hairStyle) ? hairStyle : undefined,
-      accessory: accessory && ACCS.includes(accessory) ? accessory : undefined,
+      shirtColor: shirtColor && (WARDROBE_SHIRTS.includes(shirtColor) || /^#[0-9a-fA-F]{6}$/.test(shirtColor)) ? shirtColor : undefined,
+      hairStyle: hairStyle && WARDROBE_HAIRS.includes(hairStyle) ? hairStyle : undefined,
+      accessory: accessory && WARDROBE_ACCS.includes(accessory) ? accessory : undefined,
     };
     let appMap = roomAppearance.get(code);
     if (!appMap) { appMap = new Map(); roomAppearance.set(code, appMap); }
@@ -1109,12 +1197,13 @@ io.on("connection", (socket: Socket) => {
     io.to(code).emit("leaderboard:update", { tab: "support", list: lb });
   });
 
-  // ==================== ROOM THEME (SKY ROOM) ====================
+  // ==================== ROOM THEME ====================
   socket.on("room:theme", async ({ theme }: { theme: string }) => {
     const code = socketMeta.get(socket.id)?.roomCode;
     const userId = user.userId;
     if (!code) return;
-    if (theme !== "sky" && theme !== "main") return socket.emit("app:error", { message: "Theme không hợp lệ." });
+    const VALID_THEMES = ["main", "sky", "cyberpunk", "sunset"];
+    if (!VALID_THEMES.includes(theme)) return socket.emit("app:error", { message: "Theme không hợp lệ." });
     const room = await prisma.room.findUnique({ where: { code }, select: { id: true, ownerId: true } });
     if (!room) return;
     const member = await prisma.roomMember.findUnique({ where: { roomId_userId: { roomId: room.id, userId } }, select: { role: true } });
@@ -1122,11 +1211,17 @@ io.on("connection", (socket: Socket) => {
     if (!canChangeTheme) return socket.emit("app:error", { message: "Chủ phòng/quản trị viên mới được đổi rạp." });
     await prisma.room.update({ where: { code }, data: { theme } });
     io.to(code).emit("room:theme:changed", { theme });
+    const themeLabels: Record<string, string> = {
+      sky: "Rạp chuyển sang Rạp Trời Sao 🌌",
+      cyberpunk: "Rạp chuyển sang không gian Cyberpunk Neon 2077 ⚡",
+      sunset: "Rạp chuyển sang Bãi Biển Hoàng Hôn 🌅",
+      main: "Rạp trở về không gian Velvet tiêu chuẩn 🎬",
+    };
     io.to(code).emit("chat:message", {
       id: "sys_" + Date.now(),
       userId: "system",
       user: "Hệ thống",
-      message: theme === "sky" ? "Rạp chuyển sang Rạp Trời 🌌" : "Về rạp chính.",
+      message: themeLabels[theme] || `Rạp đổi sang chủ đề ${theme}.`,
       createdAt: new Date().toISOString(),
     });
   });

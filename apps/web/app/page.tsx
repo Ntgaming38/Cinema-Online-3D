@@ -12,12 +12,7 @@ import {
   Tv,
   LogIn,
   LogOut,
-  User,
-  Shield,
-  Eye,
-  Check,
-  X,
-  PlayCircle
+  X
 } from "lucide-react";
 
 interface PublicRoomItem {
@@ -49,6 +44,7 @@ interface UserProfile {
   displayName: string;
   avatarUrl?: string | null;
   isGuest: boolean;
+  gender?: string | null;
 }
 
 export default function HomePage() {
@@ -74,7 +70,6 @@ export default function HomePage() {
   const [roomMaxMembers, setRoomMaxMembers] = useState(50);
   const [roomAllowMemberControl, setRoomAllowMemberControl] = useState(false);
   const [initialVideoUrl, setInitialVideoUrl] = useState("https://youtu.be/XJJ92B5adyg?si=tvrSSuGeQn19ZdiH");
-  const [initialVideoTitle, setInitialVideoTitle] = useState("Video mở màn");
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const [createError, setCreateError] = useState("");
 
@@ -82,6 +77,7 @@ export default function HomePage() {
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authDisplayName, setAuthDisplayName] = useState("");
+  const [authGender, setAuthGender] = useState<"male" | "female">("male");
   const [authError, setAuthError] = useState("");
   const [authSubmitting, setAuthSubmitting] = useState(false);
 
@@ -144,7 +140,7 @@ export default function HomePage() {
           allowMemberControl: roomAllowMemberControl,
           video: initialVideoUrl.trim()
             ? {
-                title: initialVideoTitle.trim() || "Video rạp chiếu",
+                title: "Video mở màn",
                 sourceUrl: initialVideoUrl.trim()
               }
             : undefined
@@ -176,7 +172,7 @@ export default function HomePage() {
     const payload =
       authMode === "login"
         ? { username: authUsername.trim(), password: authPassword }
-        : { username: authUsername.trim(), password: authPassword, displayName: authDisplayName.trim() || authUsername.trim() };
+        : { username: authUsername.trim(), password: authPassword, displayName: authDisplayName.trim() || authUsername.trim(), gender: authGender };
 
     try {
       const res = await fetch(endpoint, {
@@ -192,13 +188,20 @@ export default function HomePage() {
         return;
       }
 
-      setCurrentUser(data.user);
+      setCurrentUser({
+        ...data.user,
+        gender: data.user.gender ?? authGender
+      });
       setShowAuthModal(false);
       setAuthUsername("");
       setAuthPassword("");
       setAuthDisplayName("");
-    } catch {
-      setAuthError("Lỗi kết nối máy chủ.");
+    } catch (err: unknown) {
+      const msg = err instanceof TypeError && /fetch/.test(String(err))
+        ? "Không thể kết nối đến máy chủ. Vui lòng kiểm tra kết nối mạng hoặc khởi động lại máy chủ phát triển."
+        : "Lỗi kết nối máy chủ.";
+      setAuthError(msg);
+      console.error("Auth submit failed:", err);
     } finally {
       setAuthSubmitting(false);
     }
@@ -608,17 +611,64 @@ export default function HomePage() {
               </div>
 
               {authMode === "register" && (
-                <div>
-                  <label style={{ fontSize: "12px", color: "#c4b5fd", display: "block", marginBottom: "4px" }}>Tên hiển thị trong rạp</label>
-                  <input
-                    type="text"
-                    placeholder="Ví dụ: Hoàng Long, Gen.G..."
-                    value={authDisplayName}
-                    onChange={e => setAuthDisplayName(e.target.value)}
-                    style={{ width: "100%", background: "#0a0714", border: "1px solid #33234d", borderRadius: "9px", padding: "11px", color: "#fff", fontSize: "13px", outline: "none" }}
-                    required
-                  />
-                </div>
+                <>
+                  <div>
+                    <label style={{ fontSize: "12px", color: "#c4b5fd", display: "block", marginBottom: "4px" }}>Tên hiển thị trong rạp</label>
+                    <input
+                      type="text"
+                      placeholder="Ví dụ: Hoàng Long, Linh Nhi..."
+                      value={authDisplayName}
+                      onChange={e => setAuthDisplayName(e.target.value)}
+                      style={{ width: "100%", background: "#0a0714", border: "1px solid #33234d", borderRadius: "9px", padding: "11px", color: "#fff", fontSize: "13px", outline: "none" }}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: "12px", color: "#c4b5fd", display: "block", marginBottom: "6px" }}>Giới tính nhân vật 3D</label>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                      <button
+                        type="button"
+                        onClick={() => setAuthGender("male")}
+                        style={{
+                          background: authGender === "male" ? "linear-gradient(135deg, #2563eb, #1d4ed8)" : "#0a0714",
+                          border: authGender === "male" ? "1px solid #60a5fa" : "1px solid #33234d",
+                          color: "#fff",
+                          padding: "9px",
+                          borderRadius: "8px",
+                          fontSize: "12px",
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: "6px"
+                        }}
+                      >
+                        👨 Nam
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAuthGender("female")}
+                        style={{
+                          background: authGender === "female" ? "linear-gradient(135deg, #db2777, #be185d)" : "#0a0714",
+                          border: authGender === "female" ? "1px solid #f472b6" : "1px solid #33234d",
+                          color: "#fff",
+                          padding: "9px",
+                          borderRadius: "8px",
+                          fontSize: "12px",
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: "6px"
+                        }}
+                      >
+                        👩 Nữ
+                      </button>
+                    </div>
+                  </div>
+                </>
               )}
 
               <div>

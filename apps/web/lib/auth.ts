@@ -1,7 +1,6 @@
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
-import { prisma } from "@/lib/prisma";
 
 // Production MUST provide a strong JWT_SECRET; the shared literal is a dev-only fallback.
 if (process.env.NODE_ENV === "production" && !process.env.JWT_SECRET) {
@@ -16,6 +15,7 @@ export interface AuthTokenPayload {
   displayName: string;
   avatarUrl?: string | null;
   isGuest: boolean;
+  gender?: string | null;
 }
 
 export function signAuthToken(payload: AuthTokenPayload): string {

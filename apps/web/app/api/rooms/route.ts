@@ -106,7 +106,8 @@ export async function POST(request: NextRequest) {
         username: user.username,
         displayName: user.displayName,
         avatarUrl: user.avatarUrl,
-        isGuest: true
+        isGuest: true,
+        gender: user.gender ?? null
       };
       newAuthToken = signAuthToken(tokenPayload);
       needsCookie = true;

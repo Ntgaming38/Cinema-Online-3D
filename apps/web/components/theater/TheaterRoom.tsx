@@ -28,7 +28,6 @@ import {
   Send,
   Lock,
   Tv,
-  Check,
   X,
   Layers,
   Sparkles,
@@ -57,6 +56,7 @@ interface RoomMemberItem {
   avatarUrl?: string;
   role: "OWNER" | "MODERATOR" | "MEMBER";
   seatLabel?: string;
+  gender?: string;
   appearance?: { shirtColor?: string; hairStyle?: string; accessory?: string };
 }
 
@@ -127,12 +127,10 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   const [videoQueue, setVideoQueue] = useState<Array<{ id: string; title: string; sourceUrl: string; type: string; status: string; addedBy: string; addedByName: string; createdAt: number }>>([]);
   const [queueForm, setQueueForm] = useState({ title: "", sourceUrl: "", type: "YouTube", durationMin: "under5", hasSubtitle: "no", note: "" });
   const [skipVote, setSkipVote] = useState({ votes: 0, total: 0, ratio: 0 });
-  const [appearance, setAppearance] = useState<{ shirtColor?: string; hairStyle?: string; accessory?: string }>({});
   const [donations, setDonations] = useState<Array<{ amount: number; message?: string; userId: string; displayName: string; createdAt: string }>>([]);
   const [donationInput, setDonationInput] = useState("");
   const [projectedImage, setProjectedImage] = useState<{ url: string; setByName: string } | null>(null);
   const [roomTheme, setRoomTheme] = useState("main");
-  const [laserFlash, setLaserFlash] = useState(false);
   const [userAppearance, setUserAppearance] = useState<{ shirtColor?: string; hairStyle?: string; accessory?: string }>({});
 
   const [appNotice, setAppNotice] = useState<string | null>(null);
@@ -558,6 +556,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
         userId: m.userId,
         displayName: m.displayName,
         avatarUrl: m.avatarUrl,
+        gender: m.gender,
         appearance: m.appearance
       };
     }
@@ -769,8 +768,12 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
               </div>
               <b style={{ fontSize: "12px", display: "block", color: "#fff" }}>Nâng cấp VIP</b>
               <p style={{ fontSize: "10px", color: "#c4b5fd", margin: "4px 0 8px", lineHeight: "1.3" }}>Trải nghiệm rạp chiếu không giới hạn!</p>
-              <button type="button" style={{ background: "linear-gradient(135deg, #a855f7, #7c3aed)", color: "#fff", border: "none", borderRadius: "8px", padding: "5px 10px", fontSize: "10px", fontWeight: 700, cursor: "pointer", width: "100%" }}>
-                Nâng cấp ngay &gt;
+              <button
+                type="button"
+                onClick={() => setFeatureTab("donation")}
+                style={{ background: "linear-gradient(135deg, #a855f7, #7c3aed)", color: "#fff", border: "none", borderRadius: "8px", padding: "5px 10px", fontSize: "10px", fontWeight: 700, cursor: "pointer", width: "100%" }}
+              >
+                Ủng hộ & Nâng cấp &gt;
               </button>
             </div>
 
@@ -889,7 +892,6 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
               <TheaterScene
                 viewMode={viewMode}
                 overlayElement={screenOverlayRef.current}
-                currentUserId={currentUser?.id}
                 selectedSeat={mySeat}
                 occupiedSeats={occupiedSeatsMap}
                 isPlaying={isPlaying}
@@ -1019,7 +1021,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
         {/* 3. RIGHT SIDEBAR: CHAT & MEMBER TABS */}
         {showChatPanel && (
           <aside className="room-chat-panel">
-            {/* Chat Tabs */}
+            {/* Chat Tabs & Close Button */}
             <div style={{ display: "flex", alignItems: "center", borderBottom: "1px solid rgba(139, 92, 246, 0.2)", padding: "10px 14px", gap: "8px" }}>
               <button
                 type="button"
@@ -1034,6 +1036,25 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                 style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: "6px", background: chatTab === "members" ? "linear-gradient(135deg, #7c3aed, #6d28d9)" : "transparent", color: chatTab === "members" ? "#fff" : "#a78bfa", border: "none", borderRadius: "16px", padding: "6px", fontSize: "11px", fontWeight: 700, cursor: "pointer" }}
               >
                 <Users size={13} /> Danh sách ({onlineCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowChatPanel(false)}
+                title="Đóng chat"
+                style={{
+                  background: "rgba(255, 255, 255, 0.08)",
+                  border: "none",
+                  borderRadius: "50%",
+                  width: "26px",
+                  height: "26px",
+                  color: "#cbd5e1",
+                  cursor: "pointer",
+                  display: "grid",
+                  placeItems: "center",
+                  flexShrink: 0
+                }}
+              >
+                <X size={14} />
               </button>
             </div>
 
@@ -1174,35 +1195,23 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
       <FeaturePanels
         socket={socketRef.current}
         canModerate={canControl}
-        userId={currentUser?.id || ""}
-        displayName={currentUser?.displayName || "Người dùng"}
-        avatarUrl={currentUser?.avatarUrl}
         roomCode={roomCode}
         currentTheme={roomTheme}
         onThemeChange={t => setRoomTheme(t)}
         currentUser={currentUser}
         missions={missions}
-        setMissions={setMissions}
         leaderboard={leaderboard}
-        setLeaderboard={setLeaderboard}
         leaderboardTab={leaderboardTab}
         setLeaderboardTab={setLeaderboardTab}
         videoQueue={videoQueue}
-        setVideoQueue={setVideoQueue}
         queueForm={queueForm}
         setQueueForm={setQueueForm}
-        skipVote={skipVote}
-        setSkipVote={setSkipVote}
-        appearance={appearance}
-        setAppearance={setAppearance}
         userAppearance={userAppearance}
         setUserAppearance={setUserAppearance}
         donations={donations}
-        setDonations={setDonations}
         donationInput={donationInput}
         setDonationInput={setDonationInput}
         projectedImage={projectedImage}
-        setProjectedImage={setProjectedImage}
         featureTab={featureTab}
         setFeatureTab={setFeatureTab}
       />

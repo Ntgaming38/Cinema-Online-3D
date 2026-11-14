@@ -55,6 +55,8 @@ export const CinemaVideoPlayer = forwardRef<CinemaVideoPlayerRef, CinemaVideoPla
 
   useEffect(() => {
     setErrorMessage(null);
+    setCurrentTime(0);
+    setDuration(0);
   }, [sourceUrl]);
 
   useEffect(() => {
@@ -68,19 +70,35 @@ export const CinemaVideoPlayer = forwardRef<CinemaVideoPlayerRef, CinemaVideoPla
     activePlayerRef.current?.setMuted(audioSettingsRef.current.muted);
   };
 
-  // Poll current time and duration smoothly
+  // NativeVideoPlayer already reports time updates. Poll only YouTube, where the
+  // iframe API has no timeupdate event, and avoid work while its tab is hidden.
   useEffect(() => {
-    const timer = setInterval(() => {
-      if (activePlayerRef.current) {
-        const t = activePlayerRef.current.getCurrentTime();
-        const d = activePlayerRef.current.getDuration();
-        if (Number.isFinite(t)) setCurrentTime(t);
-        if (Number.isFinite(d) && d > 0) setDuration(d);
-      }
-    }, 500);
+    if (!sourceUrl || parsedInfo.type !== "youtube") return;
 
-    return () => clearInterval(timer);
-  }, []);
+    const pollPlayback = () => {
+      if (document.visibilityState === "hidden") return;
+
+      const player = activePlayerRef.current;
+      if (!player) return;
+
+      const time = player.getCurrentTime();
+      const nextDuration = player.getDuration();
+      if (isPlaying && Number.isFinite(time)) {
+        setCurrentTime((previous) => Math.abs(previous - time) >= 0.25 ? time : previous);
+      }
+      if (Number.isFinite(nextDuration) && nextDuration > 0) {
+        setDuration((previous) => Math.abs(previous - nextDuration) >= 0.5 ? nextDuration : previous);
+      }
+    };
+
+    pollPlayback();
+    const timer = window.setInterval(pollPlayback, 1000);
+    document.addEventListener("visibilitychange", pollPlayback);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", pollPlayback);
+    };
+  }, [isPlaying, parsedInfo.type, sourceUrl]);
 
   useImperativeHandle(ref, () => ({
     play: () => {

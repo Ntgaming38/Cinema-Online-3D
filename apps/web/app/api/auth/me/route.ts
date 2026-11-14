@@ -22,6 +22,7 @@ export async function GET(request: NextRequest) {
         exp: true,
         balance: true,
         totalDonated: true,
+        gender: true,
         shirtColor: true,
         hairStyle: true,
         accessory: true,
@@ -44,7 +45,8 @@ export async function GET(request: NextRequest) {
       username: user.username,
       displayName: user.displayName,
       avatarUrl: user.avatarUrl,
-      isGuest: !user.username
+      isGuest: !user.username,
+      gender: user.gender
     });
 
     return NextResponse.json({
@@ -88,7 +90,8 @@ export async function PATCH(request: NextRequest) {
         id: true,
         username: true,
         displayName: true,
-        avatarUrl: true
+        avatarUrl: true,
+        gender: true
       }
     });
 
@@ -97,7 +100,8 @@ export async function PATCH(request: NextRequest) {
       username: updated.username,
       displayName: updated.displayName,
       avatarUrl: updated.avatarUrl,
-      isGuest: !updated.username
+      isGuest: !updated.username,
+      gender: updated.gender
     };
 
     const token = signAuthToken(tokenPayload);
