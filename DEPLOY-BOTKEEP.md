@@ -1,6 +1,6 @@
 # Triển khai Cinema Online 3D lên Botkeep
 
-Tài liệu ngắn để copy khi cấu hình panel. Kiến trúc đã chốt: **mỗi thành phần một server Botkeep riêng** (tài khoản riêng nếu cần), không gộp ép. Chế độ gộp (`start:all`) chỉ là phương án dự phòng.
+Tài liệu ngắn để copy khi cấu hình panel. Kiến trúc đã chốt ban đầu: mỗi thành phần một server Botkeep riêng. **Cập nhật 2026-11-05:** trần đĩa 1.024MB của gói Free không chứa nổi một lần cài đầy đủ monorepo + bản build cho MỖI server riêng (daemon Botkeep tự dừng tiến trình khi vượt giới hạn đĩa, đã xác nhận từ log), nên server Cinema hiện chạy **chế độ gộp** (`npm start` = gateway `start:all`: web + realtime trong cùng 1 server). Các launcher tự xóa cache tải xuống của npm sau khi cài để chừa đĩa cho bước build (chừa lại bằng biến `CINEMA_KEEP_NPM_CACHE=1`).
 
 ---
 
@@ -17,8 +17,7 @@ Tài liệu ngắn để copy khi cấu hình panel. Kiến trúc đã chốt: *
 | Endpoint đã cấp | `node9.botkeep.cloud:49521` |
 | Tài nguyên | Kéo max gói Free: RAM 512MB · CPU 50% · Storage 1024MB |
 
-`npm start` ở root = chạy **chỉ web** (Next.js) qua `scripts/start-web.mjs`:
-web nghe trên `0.0.0.0` tại cổng `SERVER_PORT` do Botkeep cấp (code tự đọc, không cần cấu hình). Nếu chưa có bản build `.next` (Botkeep chỉ sync file rồi chạy start), launcher tự chạy build trước.
+`npm start` ở root = **chế độ gộp** qua `scripts/start-all.mjs` (xem mục 3): gateway nghe tại cổng `SERVER_PORT` do Botkeep cấp, web chạy nội bộ ở 3100, realtime ở 4001. Nếu chưa có bản build `.next`/`dist` (Botkeep chỉ sync file rồi chạy start), các launcher tự chạy build trước. Chạy riêng lẻ vẫn còn: `npm run start:web` (chỉ web), `npm run start:realtime` (chỉ realtime).
 
 ### Biến môi trường phải đặt trong panel (tab Environment) — server WEB
 
@@ -89,9 +88,10 @@ Chế độ gộp (dự phòng): đổi Start command thành `npm run start:all`
 ## 4. Các lệnh start ở root (tham khảo)
 
 ```text
-npm start              # chỉ WEB (mặc định cho server web Botkeep)
-npm run start:realtime # chỉ REALTIME (cho server realtime Botkeep)
-npm run start:all      # GỘP: gateway + web + realtime trong 1 server (dự phòng)
+npm start              # GỘP: gateway + web + realtime trong 1 server (mặc định trên Botkeep hiện tại)
+npm run start:web      # chỉ WEB
+npm run start:realtime # chỉ REALTIME
+npm run start:all      # GỘP (tên tường minh của npm start)
 npm run build          # build cả web (.next) và realtime (dist)
 ```
 
