@@ -55,6 +55,7 @@ interface RoomMemberItem {
   displayName: string;
   avatarUrl?: string;
   role: "OWNER" | "MODERATOR" | "MEMBER";
+  muted?: boolean;
   seatLabel?: string;
   gender?: string;
   appearance?: { shirtColor?: string; hairStyle?: string; accessory?: string };
@@ -129,6 +130,8 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   const [skipVote, setSkipVote] = useState({ votes: 0, total: 0, ratio: 0 });
   const [actingHost, setActingHost] = useState<{ userId: string; name: string } | null>(null);
   const [disco, setDisco] = useState(false);
+  const [slowModeSec, setSlowModeSec] = useState(0);
+  const [kickedNotice, setKickedNotice] = useState<string | null>(null);
   const [donations, setDonations] = useState<Array<{ amount: number; message?: string; userId: string; displayName: string; createdAt: string }>>([]);
   const [donationInput, setDonationInput] = useState("");
   const [projectedImage, setProjectedImage] = useState<{ url: string; setByName: string } | null>(null);
@@ -406,6 +409,15 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
       setDisco(Boolean(data.disco));
     });
 
+    socket.on("room:slowmode:changed", (data: { seconds: number }) => {
+      setSlowModeSec(Math.max(0, Math.floor(data.seconds || 0)));
+    });
+
+    socket.on("room:kicked", (data: { message?: string }) => {
+      setKickedNotice(data?.message || "Bạn đã bị mời ra khỏi phòng.");
+      setTimeout(() => router.push("/"), 2800);
+    });
+
     socket.on("vote:skip:result", () => {
       setAppNotice("Đã đủ 35% phiếu — đang chuyển sang video tiếp theo trong hàng chờ!");
       setTimeout(() => setAppNotice(null), 4500);
@@ -623,6 +635,14 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
   return (
     <div className={`cinema-app-shell room-app-shell${focusMode ? " focus-mode" : ""}`}>
+      {kickedNotice && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 200, background: "rgba(5, 2, 12, 0.88)", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px" }}>
+          <div style={{ background: "#1d1030", border: "1px solid rgba(248, 113, 113, 0.5)", borderRadius: "14px", padding: "22px 26px", maxWidth: "420px", textAlign: "center", color: "#fecaca", fontSize: "14px", lineHeight: 1.6 }}>
+            {kickedNotice}
+            <div style={{ marginTop: "8px", fontSize: "11px", color: "#fca5a5" }}>Đang đưa bạn về trang chủ…</div>
+          </div>
+        </div>
+      )}
       {/* Floating Reactions Overlay */}
       <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 9999, overflow: "hidden" }}>
         {floatingReactions.map((rx) => (
@@ -1111,6 +1131,28 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                     Chủ phòng đang vắng — <b>{actingHost.name}</b> tạm điều khiển phòng.
                   </div>
                 )}
+                {(() => {
+                  const me = membersList.find((x) => x.userId === currentUser?.id);
+                  const iAmStaff = me?.role === "OWNER" || me?.role === "MODERATOR" || actingHost?.userId === currentUser?.id;
+                  return (
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "10px", color: "#a78bfa", background: "rgba(22, 16, 38, 0.6)", padding: "6px 9px", borderRadius: "8px" }}>
+                      <span>Chat chậm {slowModeSec > 0 ? <b style={{ color: "#e9d5ff" }}>{slowModeSec}s</b> : <b style={{ color: "#e9d5ff" }}>Tắt</b>}</span>
+                      {iAmStaff && (
+                        <select
+                          value={slowModeSec}
+                          onChange={(e) => socketRef.current?.emit("room:slowmode", { seconds: Number(e.target.value) })}
+                          style={{ background: "#161129", color: "#e9d5ff", border: "1px solid rgba(139, 92, 246, 0.4)", borderRadius: "6px", fontSize: "10px", padding: "2px 4px", cursor: "pointer" }}
+                        >
+                          <option value={0}>Tắt</option>
+                          <option value={3}>3 giây</option>
+                          <option value={5}>5 giây</option>
+                          <option value={10}>10 giây</option>
+                          <option value={30}>30 giây</option>
+                        </select>
+                      )}
+                    </div>
+                  );
+                })()}
                 {membersList.map((m) => {
                   const iAmOwner = membersList.find((x) => x.userId === currentUser?.id)?.role === "OWNER";
                   return (
@@ -1121,6 +1163,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                       {m.role === "OWNER" && <span style={{ fontSize: "8.5px", background: "#713f12", color: "#fde047", padding: "1px 5px", borderRadius: "5px", fontWeight: 700 }}>CHỦ PHÒNG</span>}
                       {m.role === "MODERATOR" && <span style={{ fontSize: "8.5px", background: "#1e3a5f", color: "#7dd3fc", padding: "1px 5px", borderRadius: "5px", fontWeight: 700 }}>MOD</span>}
                       {actingHost?.userId === m.userId && <span style={{ fontSize: "8.5px", background: "#581c87", color: "#e9d5ff", padding: "1px 5px", borderRadius: "5px", fontWeight: 700 }}>TẠM QUYỀN</span>}
+                      {m.muted && <span style={{ fontSize: "8.5px", background: "#7f1d1d", color: "#fecaca", padding: "1px 5px", borderRadius: "5px", fontWeight: 700 }}>🔇 MUTE</span>}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                       {iAmOwner && m.userId !== currentUser?.id && m.role !== "OWNER" && (
@@ -1132,6 +1175,23 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                           {m.role === "MODERATOR" ? "Gỡ mod" : "Lên mod"}
                         </button>
                       )}
+                      {(() => {
+                        const me = membersList.find((x) => x.userId === currentUser?.id);
+                        const staff = me?.role === "OWNER" || me?.role === "MODERATOR" || actingHost?.userId === currentUser?.id;
+                        const canMod = staff && m.userId !== currentUser?.id && m.role !== "OWNER" && (me?.role === "OWNER" || (m.role === "MEMBER" && actingHost?.userId !== m.userId));
+                        if (!canMod) return null;
+                        const btnStyle = { fontSize: "9px", background: "#2b1650", color: "#c4b5fd", border: "1px solid rgba(167, 139, 250, 0.4)", padding: "2px 7px", borderRadius: "6px", cursor: "pointer" } as const;
+                        return (
+                          <>
+                            <button type="button" style={btnStyle} onClick={() => socketRef.current?.emit("member:mute", { userId: m.userId, minutes: m.muted ? 0 : 5 })}>
+                              {m.muted ? "Bỏ mute" : "Mute 5'"}
+                            </button>
+                            <button type="button" style={{ ...btnStyle, color: "#fca5a5", borderColor: "rgba(248, 113, 113, 0.45)" }} onClick={() => socketRef.current?.emit("member:kick", { userId: m.userId })}>
+                              Mời ra
+                            </button>
+                          </>
+                        );
+                      })()}
                       <span style={{ fontSize: "9px", background: "#381c5a", color: "#c084fc", padding: "2px 6px", borderRadius: "6px" }}>
                         {m.seatLabel ? `Ghế ${m.seatLabel}` : "Đứng xem"}
                       </span>

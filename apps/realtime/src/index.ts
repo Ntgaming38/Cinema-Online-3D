@@ -164,6 +164,10 @@ const roomProjectedImage = new Map<string, { url: string; setBy: string; setByNa
 const roomDisco = new Map<string, boolean>();
 const roomOwners = new Map<string, string>(); // code -> owner userId (cached at join)
 const roomActingHost = new Map<string, string>(); // code -> userId temporarily controlling the room while the owner is away
+const roomMutedUntil = new Map<string, Map<string, number>>(); // code -> userId -> mute expiry (epoch ms)
+const roomBannedUsers = new Map<string, Set<string>>(); // code -> userIds kicked this session (cleared when the room empties)
+const roomSlowModeSec = new Map<string, number>(); // code -> seconds a regular member must wait between messages (0 = off)
+const roomLastChatAt = new Map<string, Map<string, number>>(); // code -> userId -> last accepted chat time (slow mode)
 
 function getQueueItemVotes(code: string, itemId: string): number {
   return roomQueueVotes.get(code)?.get(itemId)?.size || 0;
@@ -280,6 +284,7 @@ function broadcastPresence(code: string) {
     displayName: rec.displayName,
     avatarUrl: rec.avatarUrl,
     role: rec.role,
+    muted: muteRemainingMs(code, uId) > 0,
     seatLabel: rec.seatLabel,
     gender: rec.gender,
     appearance: appMap?.get(uId),
@@ -336,6 +341,19 @@ function updateActingHost(code: string) {
 
 function isActingHost(code: string, userId: string) {
   return roomActingHost.get(code) === userId;
+}
+
+// Room staff = owner, appointed moderators, or the acting host. Staff are
+// exempt from the chat link filter and slow mode, and may moderate others.
+function isStaff(code: string, userId: string) {
+  if (roomOwners.get(code) === userId) return true;
+  if (isActingHost(code, userId)) return true;
+  return roomUsers.get(code)?.get(userId)?.role === "MODERATOR";
+}
+
+function muteRemainingMs(code: string, userId: string) {
+  const until = roomMutedUntil.get(code)?.get(userId) || 0;
+  return Math.max(0, until - Date.now());
 }
 
 async function loadRoomQueue(code: string, roomDbId: string) {
@@ -464,6 +482,10 @@ io.on("connection", (socket: Socket) => {
       }
 
       roomOwners.set(code, room.ownerId);
+
+      if (roomBannedUsers.get(code)?.has(user.userId) && room.ownerId !== user.userId) {
+        return socket.emit("app:error", { message: "Bạn đã bị mời ra khỏi phòng này và không thể vào lại trong phiên này." });
+      }
 
       if (room.status === "ENDED") {
         return socket.emit("app:error", { message: "Phòng chiếu này đã kết thúc." });
@@ -649,6 +671,8 @@ io.on("connection", (socket: Socket) => {
           actingHostName: usersMap.get(actingHostId)?.displayName || null,
         });
       }
+      const slowSec = roomSlowModeSec.get(code) || 0;
+      if (slowSec > 0) socket.emit("room:slowmode:changed", { seconds: slowSec });
 
       // Announce arrival if first tab for this user
       if (userRecord.sockets.size === 1) {
@@ -686,6 +710,29 @@ io.on("connection", (socket: Socket) => {
 
     const message = typeof payload.message === "string" ? payload.message.trim().slice(0, 500) : "";
     if (!message) return;
+
+    // Moderation gates (room staff are exempt from the link filter and
+    // slow mode; a mute applies to everyone except the owner).
+    const muteLeftMs = muteRemainingMs(code, user.userId);
+    if (muteLeftMs > 0 && roomOwners.get(code) !== user.userId) {
+      return socket.emit("app:error", { message: `Bạn đang bị tắt tiếng, còn ${Math.ceil(muteLeftMs / 1000)} giây.` });
+    }
+    if (!isStaff(code, user.userId)) {
+      if (/(https?:\/\/|www\.)\S+/i.test(message)) {
+        return socket.emit("app:error", { message: "Khán giả không được gửi link trong chat." });
+      }
+      const slowSec = roomSlowModeSec.get(code) || 0;
+      if (slowSec > 0) {
+        const lastMap = roomLastChatAt.get(code) || new Map<string, number>();
+        const last = lastMap.get(user.userId) || 0;
+        const waitMs = slowSec * 1000 - (Date.now() - last);
+        if (last && waitMs > 0) {
+          return socket.emit("app:error", { message: `Phòng đang bật chat chậm — chờ ${Math.ceil(waitMs / 1000)} giây nữa để gửi tiếp.` });
+        }
+        lastMap.set(user.userId, Date.now());
+        roomLastChatAt.set(code, lastMap);
+      }
+    }
 
     const chatItem = {
       id: "msg_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6),
@@ -1249,6 +1296,91 @@ io.on("connection", (socket: Socket) => {
     }
   });
 
+  // ==================== MODERATION: KICK / MUTE / SLOW MODE ====================
+  // Shared gate: requester must be room staff; the owner can moderate
+  // anyone, other staff can only moderate regular members.
+  async function moderationGate(code: string, targetId: string) {
+    const room = await prisma.room.findUnique({ where: { code }, select: { id: true, ownerId: true } });
+    if (!room) return null;
+    if (!isStaff(code, user.userId)) {
+      socket.emit("app:error", { message: "Chỉ chủ phòng/quản trị viên mới dùng được chức năng quản phòng." });
+      return null;
+    }
+    if (targetId === room.ownerId) {
+      socket.emit("app:error", { message: "Không thể áp dụng với chủ phòng." });
+      return null;
+    }
+    if (user.userId !== room.ownerId && isStaff(code, targetId)) {
+      socket.emit("app:error", { message: "Quản trị viên không thể xử lý quản trị viên khác." });
+      return null;
+    }
+    return room;
+  }
+
+  socket.on("member:kick", async ({ userId: targetId }: { userId?: string }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    if (!code || !targetId || targetId === user.userId) return;
+    const room = await moderationGate(code, targetId);
+    if (!room) return;
+    let banned = roomBannedUsers.get(code);
+    if (!banned) { banned = new Set(); roomBannedUsers.set(code, banned); }
+    banned.add(targetId);
+    const rec = roomUsers.get(code)?.get(targetId);
+    const targetName = rec?.displayName || "Một thành viên";
+    if (rec) {
+      for (const sid of [...rec.sockets]) {
+        const s = io.sockets.sockets.get(sid);
+        if (s) {
+          s.emit("room:kicked", { message: "Bạn đã bị mời ra khỏi phòng bởi quản trị viên." });
+          s.disconnect(true); // the disconnect handler runs the normal leave cleanup
+        }
+      }
+    }
+    io.to(code).emit("chat:message", {
+      id: "sys_" + Date.now(),
+      userId: "system",
+      user: "Hệ thống",
+      message: `${targetName} đã bị mời ra khỏi phòng.`,
+      createdAt: new Date().toISOString(),
+    });
+    socket.emit("app:notice", { message: `Đã mời ${targetName} ra khỏi phòng.` });
+  });
+
+  socket.on("member:mute", async ({ userId: targetId, minutes }: { userId?: string; minutes?: number }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    if (!code || !targetId || targetId === user.userId) return;
+    const room = await moderationGate(code, targetId);
+    if (!room) return;
+    const rec = roomUsers.get(code)?.get(targetId);
+    const targetName = rec?.displayName || "Thành viên";
+    let muteMap = roomMutedUntil.get(code);
+    if (!muteMap) { muteMap = new Map(); roomMutedUntil.set(code, muteMap); }
+    const mins = Number.isFinite(minutes) ? Math.floor(minutes!) : 0;
+    if (mins <= 0) {
+      muteMap.delete(targetId);
+      socket.emit("app:notice", { message: `Đã bỏ tắt tiếng cho ${targetName}.` });
+      if (rec) for (const sid of rec.sockets) io.sockets.sockets.get(sid)?.emit("app:notice", { message: "Bạn đã được bỏ tắt tiếng." });
+    } else {
+      const clamped = Math.min(1440, mins);
+      muteMap.set(targetId, Date.now() + clamped * 60_000);
+      socket.emit("app:notice", { message: `Đã tắt tiếng ${targetName} trong ${clamped} phút.` });
+      if (rec) for (const sid of rec.sockets) io.sockets.sockets.get(sid)?.emit("app:notice", { message: `Bạn đã bị tắt tiếng ${clamped} phút bởi quản trị viên.` });
+    }
+    broadcastPresence(code);
+  });
+
+  socket.on("room:slowmode", async ({ seconds }: { seconds?: number }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    if (!code) return;
+    if (!isStaff(code, user.userId)) {
+      return socket.emit("app:error", { message: "Chỉ chủ phòng/quản trị viên mới chỉnh được chat chậm." });
+    }
+    const sec = Number.isFinite(seconds) ? Math.max(0, Math.min(120, Math.floor(seconds!))) : 0;
+    if (sec > 0) roomSlowModeSec.set(code, sec); else roomSlowModeSec.delete(code);
+    io.to(code).emit("room:slowmode:changed", { seconds: sec });
+    socket.emit("app:notice", { message: sec > 0 ? `Đã bật chat chậm: ${sec} giây giữa hai tin nhắn.` : "Đã tắt chat chậm." });
+  });
+
   // ==================== CHARACTER / APPEARANCE ====================
   socket.on("character:update", ({ shirtColor, hairStyle, accessory }: { shirtColor?: string; hairStyle?: string; accessory?: string }) => {
     const code = socketMeta.get(socket.id)?.roomCode;
@@ -1444,6 +1576,10 @@ io.on("connection", (socket: Socket) => {
       roomUsers.delete(code);
       roomActingHost.delete(code);
       roomOwners.delete(code);
+      roomMutedUntil.delete(code);
+      roomBannedUsers.delete(code);
+      roomSlowModeSec.delete(code);
+      roomLastChatAt.delete(code);
     } else {
       updateActingHost(code);
       broadcastPresence(code);
