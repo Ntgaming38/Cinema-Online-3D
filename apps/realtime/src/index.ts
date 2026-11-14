@@ -1587,6 +1587,21 @@ io.on("connection", (socket: Socket) => {
   }
 });
 
+// Syncplay-style heartbeat: every 5 seconds, each occupied room receives a
+// fresh playback:state with the position advanced to "now", so clients can
+// correct drift gently (rate nudge) instead of only reacting to commands.
+setInterval(() => {
+  for (const [code, state] of roomPlaybacks) {
+    const usersMap = roomUsers.get(code);
+    if (!usersMap || usersMap.size === 0) continue;
+    let positionSec = state.positionSec;
+    if (state.isPlaying) {
+      positionSec += ((Date.now() - state.updatedAt) / 1000) * state.playbackRate;
+    }
+    io.to(code).emit("playback:state", { ...state, positionSec, updatedAt: Date.now() });
+  }
+}, 5000);
+
 // Port resolution: on Botkeep the assigned public port arrives as SERVER_PORT
 // (or PORT) and must win; locally REALTIME_PORT keeps working as before.
 const port = Number(process.env.SERVER_PORT || process.env.PORT || process.env.REALTIME_PORT || 4001);

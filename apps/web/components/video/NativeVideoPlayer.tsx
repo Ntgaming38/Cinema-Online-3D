@@ -133,6 +133,10 @@ export const NativeVideoPlayer = forwardRef<UnifiedPlayerRef, NativeVideoPlayerP
     getDuration: () => {
       return videoRef.current?.duration || 0;
     },
+    setPlaybackRate: (rate: number) => {
+      const video = videoRef.current;
+      if (video && Number.isFinite(rate)) video.playbackRate = rate;
+    },
     setVolume: (volume: number) => {
       const video = videoRef.current;
       if (video) video.volume = Math.max(0, Math.min(1, volume / 100));
