@@ -162,6 +162,8 @@ const roomVideoQueue = new Map<string, Array<{
 // roomCode -> projected image info
 const roomProjectedImage = new Map<string, { url: string; setBy: string; setByName: string; setAt: number } | null>();
 const roomDisco = new Map<string, boolean>();
+const roomOwners = new Map<string, string>(); // code -> owner userId (cached at join)
+const roomActingHost = new Map<string, string>(); // code -> userId temporarily controlling the room while the owner is away
 
 function getQueueItemVotes(code: string, itemId: string): number {
   return roomQueueVotes.get(code)?.get(itemId)?.size || 0;
@@ -283,6 +285,57 @@ function broadcastPresence(code: string) {
     appearance: appMap?.get(uId),
   }));
   io.to(code).emit("room:presence", { count: usersMap.size, members: membersList });
+}
+
+// Host failover: while the room owner is NOT in the room, control rights
+// pass to an "acting host" — the longest-present moderator, else the
+// longest-present member (roomUsers preserves join order) — so playback
+// and queue control are never orphaned when the owner drops. Broadcasts
+// room:host and a system chat line whenever the acting host changes.
+function updateActingHost(code: string) {
+  const usersMap = roomUsers.get(code);
+  const prev = roomActingHost.get(code) || null;
+  if (!usersMap || usersMap.size === 0) {
+    if (prev) roomActingHost.delete(code);
+    return;
+  }
+  const ownerId = roomOwners.get(code);
+  let next: string | null = null;
+  if (ownerId && !usersMap.has(ownerId)) {
+    for (const [uid, rec] of usersMap) {
+      if (rec.role === "MODERATOR") { next = uid; break; }
+    }
+    if (!next) next = usersMap.keys().next().value ?? null;
+  }
+  if (next === prev) return;
+  if (next) roomActingHost.set(code, next); else roomActingHost.delete(code);
+  const rec = next ? usersMap.get(next) : null;
+  io.to(code).emit("room:host", {
+    ownerId: ownerId || null,
+    actingHostId: next,
+    actingHostName: rec?.displayName || null,
+  });
+  if (next && rec) {
+    io.to(code).emit("chat:message", {
+      id: "sys_" + Date.now(),
+      userId: "system",
+      user: "Hệ thống",
+      message: `Chủ phòng đang vắng — ${rec.displayName} tạm điều khiển phòng.`,
+      createdAt: new Date().toISOString(),
+    });
+  } else if (prev && !next) {
+    io.to(code).emit("chat:message", {
+      id: "sys_" + Date.now(),
+      userId: "system",
+      user: "Hệ thống",
+      message: "Chủ phòng đã quay lại điều khiển phòng.",
+      createdAt: new Date().toISOString(),
+    });
+  }
+}
+
+function isActingHost(code: string, userId: string) {
+  return roomActingHost.get(code) === userId;
 }
 
 async function loadRoomQueue(code: string, roomDbId: string) {
@@ -409,6 +462,8 @@ io.on("connection", (socket: Socket) => {
       if (!room) {
         return socket.emit("app:error", { message: "Phòng chiếu không tồn tại hoặc đã bị xóa." });
       }
+
+      roomOwners.set(code, room.ownerId);
 
       if (room.status === "ENDED") {
         return socket.emit("app:error", { message: "Phòng chiếu này đã kết thúc." });
@@ -570,6 +625,7 @@ io.on("connection", (socket: Socket) => {
 
       // Broadcast presence (unique users count, incl. appearance)
       broadcastPresence(code);
+      updateActingHost(code);
 
       // Initial feature states for the joining socket: missions, queue, leaderboard, theme, projected image
       await emitMissionsToSocket(socket, user.userId, room.id);
@@ -585,6 +641,14 @@ io.on("connection", (socket: Socket) => {
       const projected = roomProjectedImage.get(code);
       if (projected) socket.emit("image:projected", { url: projected.url, setBy: projected.setBy, setByName: projected.setByName });
       if (roomDisco.get(code)) socket.emit("room:disco:changed", { disco: true });
+      const actingHostId = roomActingHost.get(code);
+      if (actingHostId) {
+        socket.emit("room:host", {
+          ownerId: room.ownerId,
+          actingHostId,
+          actingHostName: usersMap.get(actingHostId)?.displayName || null,
+        });
+      }
 
       // Announce arrival if first tab for this user
       if (userRecord.sockets.size === 1) {
@@ -692,7 +756,7 @@ io.on("connection", (socket: Socket) => {
 
       const isOwner = room.ownerId === user.userId;
       const isMod = userRecord?.role === "MODERATOR";
-      const canControl = isOwner || isMod || room.allowMemberControl;
+      const canControl = isOwner || isMod || isActingHost(code, user.userId) || room.allowMemberControl;
 
       if (!canControl) {
         respond(false, "Chỉ Chủ phòng hoặc Quản trị viên mới có quyền điều khiển video.");
@@ -1044,7 +1108,7 @@ io.on("connection", (socket: Socket) => {
     const member = await prisma.roomMember.findUnique({ where: { roomId_userId: { roomId: room.id, userId } }, select: { role: true } });
     const isOwner = room.ownerId === userId;
     const isMod = member?.role === "MODERATOR" || member?.role === "OWNER";
-    if (!isOwner && !isMod && !room.allowMemberControl) {
+    if (!isOwner && !isMod && !isActingHost(code, userId) && !room.allowMemberControl) {
       return socket.emit("app:error", { message: "Chủ phòng/quản trị viên mới được duyệt video." });
     }
     // The item must belong to THIS room — never moderate another room's queue by id.
@@ -1084,7 +1148,7 @@ io.on("connection", (socket: Socket) => {
     const member = await prisma.roomMember.findUnique({ where: { roomId_userId: { roomId: room.id, userId } }, select: { role: true } });
     const isOwner = room.ownerId === userId;
     const isMod = member?.role === "MODERATOR" || member?.role === "OWNER";
-    if (!isOwner && !isMod && !room.allowMemberControl) {
+    if (!isOwner && !isMod && !isActingHost(code, userId) && !room.allowMemberControl) {
       return socket.emit("app:error", { message: "Chủ phòng/quản trị viên mới được phát video." });
     }
     const item = await prisma.videoQueueItem.findUnique({ where: { id: itemId }, include: { addedBy: { select: { displayName: true } } } });
@@ -1141,6 +1205,45 @@ io.on("connection", (socket: Socket) => {
           user: "Hệ thống",
           message: "Đã đủ 35% phiếu bỏ qua, nhưng hàng chờ chưa có video nào được duyệt.",
           createdAt: new Date().toISOString(),
+        });
+      }
+    }
+  });
+
+  // ==================== MEMBER ROLE MANAGEMENT (owner only) ====================
+  socket.on("member:set-role", async ({ userId: targetId, role }: { userId?: string; role?: string }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    if (!code || !targetId) return;
+    if (role !== "MODERATOR" && role !== "MEMBER") {
+      return socket.emit("app:error", { message: "Vai trò không hợp lệ." });
+    }
+    const room = await prisma.room.findUnique({ where: { code }, select: { id: true, ownerId: true } });
+    if (!room) return;
+    if (room.ownerId !== user.userId) {
+      return socket.emit("app:error", { message: "Chỉ chủ phòng mới được bổ nhiệm quản trị viên." });
+    }
+    if (targetId === room.ownerId) {
+      return socket.emit("app:error", { message: "Không thể đổi vai trò của chủ phòng." });
+    }
+    const updated = await prisma.roomMember.updateMany({
+      where: { roomId: room.id, userId: targetId },
+      data: { role },
+    });
+    if (updated.count === 0) {
+      return socket.emit("app:error", { message: "Người này chưa phải thành viên của phòng." });
+    }
+    const usersMap = roomUsers.get(code);
+    const rec = usersMap?.get(targetId);
+    if (rec) rec.role = role;
+    broadcastPresence(code);
+    updateActingHost(code);
+    socket.emit("app:notice", { message: role === "MODERATOR" ? "Đã bổ nhiệm quản trị viên." : "Đã gỡ quyền quản trị viên." });
+    if (rec) {
+      for (const sid of rec.sockets) {
+        io.sockets.sockets.get(sid)?.emit("app:notice", {
+          message: role === "MODERATOR"
+            ? "Bạn đã được chủ phòng bổ nhiệm làm quản trị viên của phòng."
+            : "Chủ phòng đã gỡ quyền quản trị viên của bạn.",
         });
       }
     }
@@ -1207,7 +1310,7 @@ io.on("connection", (socket: Socket) => {
     const room = await prisma.room.findUnique({ where: { code }, select: { id: true, ownerId: true } });
     if (!room) return;
     const member = await prisma.roomMember.findUnique({ where: { roomId_userId: { roomId: room.id, userId } }, select: { role: true } });
-    const canChangeTheme = room.ownerId === userId || member?.role === "MODERATOR" || member?.role === "OWNER";
+    const canChangeTheme = room.ownerId === userId || member?.role === "MODERATOR" || member?.role === "OWNER" || isActingHost(code, userId);
     if (!canChangeTheme) return socket.emit("app:error", { message: "Chủ phòng/quản trị viên mới được đổi rạp." });
     await prisma.room.update({ where: { code }, data: { theme } });
     io.to(code).emit("room:theme:changed", { theme });
@@ -1234,7 +1337,7 @@ io.on("connection", (socket: Socket) => {
     const room = await prisma.room.findUnique({ where: { code }, select: { id: true, ownerId: true } });
     if (!room) return;
     const member = await prisma.roomMember.findUnique({ where: { roomId_userId: { roomId: room.id, userId } }, select: { role: true } });
-    const canToggleDisco = room.ownerId === userId || member?.role === "MODERATOR" || member?.role === "OWNER";
+    const canToggleDisco = room.ownerId === userId || member?.role === "MODERATOR" || member?.role === "OWNER" || isActingHost(code, userId);
     if (!canToggleDisco) return socket.emit("app:error", { message: "Chủ phòng/quản trị viên mới được bật/tắt disco." });
     roomDisco.set(code, !!disco);
     io.to(code).emit("room:disco:changed", { disco: !!disco });
@@ -1339,7 +1442,10 @@ io.on("connection", (socket: Socket) => {
     if (uniqueCount === 0) {
       // Room empty in memory
       roomUsers.delete(code);
+      roomActingHost.delete(code);
+      roomOwners.delete(code);
     } else {
+      updateActingHost(code);
       broadcastPresence(code);
     }
   }

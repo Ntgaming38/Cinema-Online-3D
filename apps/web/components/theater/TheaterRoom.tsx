@@ -127,6 +127,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   const [videoQueue, setVideoQueue] = useState<Array<{ id: string; title: string; sourceUrl: string; type: string; status: string; addedBy: string; addedByName: string; createdAt: number }>>([]);
   const [queueForm, setQueueForm] = useState({ title: "", sourceUrl: "", type: "YouTube", durationMin: "under5", hasSubtitle: "no", note: "" });
   const [skipVote, setSkipVote] = useState({ votes: 0, total: 0, ratio: 0 });
+  const [actingHost, setActingHost] = useState<{ userId: string; name: string } | null>(null);
   const [donations, setDonations] = useState<Array<{ amount: number; message?: string; userId: string; displayName: string; createdAt: string }>>([]);
   const [donationInput, setDonationInput] = useState("");
   const [projectedImage, setProjectedImage] = useState<{ url: string; setByName: string } | null>(null);
@@ -394,6 +395,10 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
     socket.on("vote:skip:update", (data: { votes: number; total: number; ratio: number }) => {
       setSkipVote({ votes: data.votes, total: data.total, ratio: data.ratio });
+    });
+
+    socket.on("room:host", (data: { actingHostId: string | null; actingHostName: string | null }) => {
+      setActingHost(data.actingHostId ? { userId: data.actingHostId, name: data.actingHostName || "" } : null);
     });
 
     socket.on("vote:skip:result", () => {
@@ -1092,17 +1097,39 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
             ) : (
               <div style={{ flex: 1, overflowY: "auto", padding: "14px", display: "flex", flexDirection: "column", gap: "8px" }}>
                 <b style={{ fontSize: "11px", color: "#c084fc", marginBottom: "4px" }}>Khán giả trong rạp</b>
-                {membersList.map((m) => (
+                {actingHost && (
+                  <div style={{ fontSize: "10px", color: "#fde68a", background: "rgba(120, 72, 20, 0.35)", border: "1px solid rgba(253, 224, 71, 0.35)", padding: "6px 9px", borderRadius: "8px" }}>
+                    Chủ phòng đang vắng — <b>{actingHost.name}</b> tạm điều khiển phòng.
+                  </div>
+                )}
+                {membersList.map((m) => {
+                  const iAmOwner = membersList.find((x) => x.userId === currentUser?.id)?.role === "OWNER";
+                  return (
                   <div key={m.userId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(22, 16, 38, 0.6)", padding: "7px 10px", borderRadius: "8px", fontSize: "11px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                       <img src={m.avatarUrl || `https://api.dicebear.com/7.x/bottts/svg?seed=${m.userId}`} alt="" style={{ width: "24px", height: "24px", borderRadius: "50%" }} />
                       <span style={{ color: m.role === "OWNER" ? "#fde047" : "#fff" }}>{m.displayName}</span>
+                      {m.role === "OWNER" && <span style={{ fontSize: "8.5px", background: "#713f12", color: "#fde047", padding: "1px 5px", borderRadius: "5px", fontWeight: 700 }}>CHỦ PHÒNG</span>}
+                      {m.role === "MODERATOR" && <span style={{ fontSize: "8.5px", background: "#1e3a5f", color: "#7dd3fc", padding: "1px 5px", borderRadius: "5px", fontWeight: 700 }}>MOD</span>}
+                      {actingHost?.userId === m.userId && <span style={{ fontSize: "8.5px", background: "#581c87", color: "#e9d5ff", padding: "1px 5px", borderRadius: "5px", fontWeight: 700 }}>TẠM QUYỀN</span>}
                     </div>
-                    <span style={{ fontSize: "9px", background: "#381c5a", color: "#c084fc", padding: "2px 6px", borderRadius: "6px" }}>
-                      {m.seatLabel ? `Ghế ${m.seatLabel}` : "Đứng xem"}
-                    </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      {iAmOwner && m.userId !== currentUser?.id && m.role !== "OWNER" && (
+                        <button
+                          type="button"
+                          onClick={() => socketRef.current?.emit("member:set-role", { userId: m.userId, role: m.role === "MODERATOR" ? "MEMBER" : "MODERATOR" })}
+                          style={{ fontSize: "9px", background: "#2b1650", color: "#c4b5fd", border: "1px solid rgba(167, 139, 250, 0.4)", padding: "2px 7px", borderRadius: "6px", cursor: "pointer" }}
+                        >
+                          {m.role === "MODERATOR" ? "Gỡ mod" : "Lên mod"}
+                        </button>
+                      )}
+                      <span style={{ fontSize: "9px", background: "#381c5a", color: "#c084fc", padding: "2px 6px", borderRadius: "6px" }}>
+                        {m.seatLabel ? `Ghế ${m.seatLabel}` : "Đứng xem"}
+                      </span>
+                    </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
