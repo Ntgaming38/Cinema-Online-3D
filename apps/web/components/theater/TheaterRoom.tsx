@@ -72,6 +72,10 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   const router = useRouter();
   const socketRef = useRef<Socket | null>(null);
   const playerRef = useRef<CinemaVideoPlayerRef>(null);
+  // Syncplay-style drift correction state: the last authoritative playback
+  // state and the rate currently applied for gentle correction.
+  const syncRef = useRef<{ positionSec: number; isPlaying: boolean; playbackRate: number; at: number } | null>(null);
+  const appliedRateRef = useRef(1);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const screenOverlayRef = useRef<HTMLDivElement>(null);
 
@@ -350,13 +354,24 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
         setVideoTitle(state.videoTitle);
       }
 
+      syncRef.current = {
+        positionSec: state.positionSec,
+        isPlaying: state.isPlaying,
+        playbackRate: state.playbackRate || 1,
+        at: Date.now(),
+      };
+
       setIsPlaying(state.isPlaying);
 
       if (playerRef.current) {
         const clientPos = playerRef.current.getCurrentTime();
         const diff = Math.abs(clientPos - state.positionSec);
-        if (diff > 1.8) {
+        // Big jumps (video change, seek command, first join) snap at once;
+        // small drift is absorbed gently by the sync interval below.
+        if (diff > 2.5 || (!state.isPlaying && diff > 1.2)) {
           playerRef.current.seekTo(state.positionSec);
+          appliedRateRef.current = state.playbackRate || 1;
+          playerRef.current.setPlaybackRate(appliedRateRef.current);
         }
 
         if (state.isPlaying) {
@@ -463,6 +478,44 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
     }, 60000);
     return () => clearInterval(timer);
   }, [connected]);
+
+  // Syncplay-style drift correction, checked every second against the
+  // expected position extrapolated from the last playback:state (the
+  // server also re-broadcasts state every 5s). Drift under 0.35s is
+  // ignored; 0.35–2.5s is absorbed by a ±10% playback-rate nudge so the
+  // picture never visibly jumps; beyond 2.5s it snaps with a seek.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const sync = syncRef.current;
+      const player = playerRef.current;
+      if (!sync || !player) return;
+      const baseRate = sync.playbackRate || 1;
+      const expected = sync.isPlaying
+        ? sync.positionSec + ((Date.now() - sync.at) / 1000) * baseRate
+        : sync.positionSec;
+      const clientPos = player.getCurrentTime();
+      if (!Number.isFinite(clientPos) || clientPos <= 0) return;
+      const diff = clientPos - expected; // > 0 ahead of the room, < 0 behind
+      const abs = Math.abs(diff);
+      if (abs > 2.5) {
+        player.seekTo(expected);
+        sync.positionSec = expected;
+        sync.at = Date.now();
+        if (appliedRateRef.current !== baseRate) {
+          appliedRateRef.current = baseRate;
+          player.setPlaybackRate(baseRate);
+        }
+        return;
+      }
+      if (!sync.isPlaying) return;
+      const target = abs > 0.35 ? baseRate * (diff < 0 ? 1.1 : 0.9) : baseRate;
+      if (appliedRateRef.current !== target) {
+        appliedRateRef.current = target;
+        player.setPlaybackRate(target);
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const canControl = userRole === "OWNER" || userRole === "MODERATOR" || allowMemberControl;
   const parsedVideo = parseVideoUrl(sourceUrl);

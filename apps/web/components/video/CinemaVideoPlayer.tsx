@@ -13,6 +13,7 @@ export interface CinemaVideoPlayerRef {
   getCurrentTime: () => number;
   setVolume: (volume: number) => void;
   setMuted: (muted: boolean) => void;
+  setPlaybackRate: (rate: number) => void;
 }
 
 interface CinemaVideoPlayerProps {
@@ -119,6 +120,9 @@ export const CinemaVideoPlayer = forwardRef<CinemaVideoPlayerRef, CinemaVideoPla
     },
     setMuted: (nextMuted: boolean) => {
       activePlayerRef.current?.setMuted(nextMuted);
+    },
+    setPlaybackRate: (rate: number) => {
+      activePlayerRef.current?.setPlaybackRate(rate);
     },
   }));
 
