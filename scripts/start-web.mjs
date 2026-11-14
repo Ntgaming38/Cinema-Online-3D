@@ -8,7 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ROOT, ensurePrisma } from "./ensure-prisma.mjs";
+import { ROOT, ensurePrisma, purgeNpmCache } from "./ensure-prisma.mjs";
 
 export function resolveWebPort(env = process.env) {
   return Number(env.CINEMA_WEB_PORT || env.SERVER_PORT || env.PORT || 3000);
@@ -26,6 +26,7 @@ function main() {
   const port = resolveWebPort();
   const webDir = path.join(ROOT, "apps/web");
 
+  purgeNpmCache();
   ensurePrisma(ROOT);
 
   if (!fs.existsSync(path.join(webDir, ".next/BUILD_ID"))) {
@@ -33,12 +34,24 @@ function main() {
     const build = spawnSync("npm", ["--workspace", "@cinema-online-3d/web", "run", "build"], {
       cwd: ROOT,
       stdio: "inherit",
-      env: process.env,
+      // Cap the build's V8 heap so garbage collection works harder
+      // instead of the process ballooning into the 512MB server limit.
+      env: {
+        ...process.env,
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, "--max-old-space-size=384"]
+          .filter(Boolean)
+          .join(" "),
+      },
     });
     if (build.error || build.status !== 0) {
       console.error("[start-web] Web build failed; cannot start.");
       process.exit(build.status ?? 1);
     }
+  }
+
+  if (process.env.CINEMA_BUILD_ONLY === "1") {
+    console.log("[start-web] Build-only mode — build is ready, exiting without starting the server.");
+    return;
   }
 
   const nextBin = findNextBin(ROOT);

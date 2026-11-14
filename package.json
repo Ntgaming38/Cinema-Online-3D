@@ -10,7 +10,7 @@
     "dev:web": "npm --workspace apps/web run dev",
     "dev:realtime": "npm --workspace apps/realtime run dev",
     "build": "npm --workspace apps/web run build && npm --workspace apps/realtime run build",
-    "start": "node scripts/start-web.mjs",
+    "start": "node scripts/start-all.mjs",
     "start:web": "node scripts/start-web.mjs",
     "start:realtime": "node scripts/start-realtime.mjs",
     "start:all": "node scripts/start-all.mjs",
@@ -27,5 +27,8 @@
     "prisma": "^6.19.0",
     "tsx": "^4.23.15",
     "typescript": "^5.8.3"
+  },
+  "overrides": {
+    "sharp": "npm:empty-npm-package@1.0.0"
   }
 }

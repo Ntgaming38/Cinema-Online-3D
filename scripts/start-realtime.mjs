@@ -10,12 +10,13 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ROOT, ensurePrisma } from "./ensure-prisma.mjs";
+import { ROOT, ensurePrisma, purgeNpmCache } from "./ensure-prisma.mjs";
 
 function main() {
   const realtimeDir = path.join(ROOT, "apps/realtime");
   const entry = path.join(realtimeDir, "dist/index.js");
 
+  purgeNpmCache();
   ensurePrisma(ROOT);
 
   if (!fs.existsSync(entry)) {
@@ -29,6 +30,11 @@ function main() {
       console.error("[start-realtime] Realtime build failed; cannot start.");
       process.exit(build.status ?? 1);
     }
+  }
+
+  if (process.env.CINEMA_BUILD_ONLY === "1") {
+    console.log("[start-realtime] Build-only mode — build is ready, exiting without starting the server.");
+    return;
   }
 
   const child = spawn(process.execPath, [entry], {
