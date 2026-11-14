@@ -101,3 +101,18 @@ Các launcher tự build phần còn thiếu (`.next` / `dist`) và `postinstall
 
 - Gói Free chỉ có **512MB RAM**: `next build` khá nặng, lần build đầu trên Botkeep có thể chậm hoặc hụt RAM. Nếu build trên Botkeep thất bại vì RAM, hãy build sẵn ở máy local/PC rồi mới tính phương án đưa bản build lên, hoặc tách build khỏi lúc start.
 - Khi chạy production, web + Prisma ở mức 512MB là chật — theo dõi mục Usage sau khi chạy thật; đây là lý do kiến trúc tách server được ưu tiên thay vì gộp.
+
+---
+
+## 6. Quy trình deploy chuẩn (rút kinh nghiệm 2026-11-04/05, cập nhật 2026-11-14)
+
+Bản live hiện tại (https://sd2z43.bot-keep.xyz) chạy **chế độ GỘP** bằng đúng quy trình này. Build trực tiếp trên server đã thử 3 lần và đều chết (hết đĩa 1,024MB lúc cài, SIGKILL hết RAM 512MB lúc build) — đừng thử lại; luôn build sẵn ở máy ngoài.
+
+1. **Dọn sâu TRƯỚC khi Sync**: trên panel Files của server, xóa hẳn `node_modules` và `~/.npm/_cacache`. Sync chụp ảnh cây file hiện có trước khi ghi bản mới — đĩa đang đầy là sync đứt giữa chừng ("Source staging was interrupted").
+2. **Sync** theo GitHub `main` (panel tự cài dependencies; các launcher tự dọn cache npm sau cài và bỏ qua build khi đã có bản build sẵn).
+3. **Build sẵn ở máy ngoài**: tải mã nguồn `main` mới nhất → `npm ci` → `prisma generate` → `npm run build` (chỉ cần phần web `.next`; realtime `dist` nhẹ, để launcher tự build). Nếu Node tải engine Prisma bị ECONNRESET: tải bằng curl từ `binaries.prisma.sh/all_commits/<hash>/debian-openssl-3.0.x/` (hash nằm trong `node_modules/@prisma/engines-version`), rồi generate với biến môi trường `PRISMA_QUERY_ENGINE_LIBRARY` + `PRISMA_SCHEMA_ENGINE_BINARY`. Lúc build dùng `JWT_SECRET`/`DATABASE_URL` giả — build không chạm database thật. Nén thư mục `apps/web/.next` (bỏ qua thư mục con `cache`) ≈ 1,7MB.
+4. **Đưa bản build lên**: panel Files → upload file nén vào `apps/web/` → Unarchive → kiểm tra `.next/BUILD_ID` khớp bản vừa build.
+5. **Env trên panel** (chỉ 4 biến): `DATABASE_URL`, `REALTIME_PORT`, `WEB_ORIGIN=https://sd2z43.bot-keep.xyz`, `JWT_SECRET`. **Không** đặt `NEXT_PUBLIC_REALTIME_URL` (chế độ gộp dùng cùng origin), không đặt tay `SERVER_PORT`.
+6. **Start** → log phải có `Gateway listening on 0.0.0.0:49521` và `Ready`. Kiểm tra sống thật: mở trang chủ, `GET /api/rooms` trả dữ liệu thật, bắt tay Socket.IO polling (`/socket.io/?EIO=4&transport=polling`) trả về sid.
+7. **Chống mất code (bài học 2026-11-14)**: `main` trên GitHub là nguồn sự thật duy nhất. Mọi phía — PC/VS Code, AI khác, Muse — phải `git pull` bản main mới nhất TRƯỚC khi push, tuyệt đối không force-push. Một lần push từ mốc cũ đã làm main mất 3 PR sửa deploy (đã khôi phục bằng PR #7).
+8. **Prisma ở máy dev**: `npm run dev` đã gắn `scripts/prisma-client-guard.mjs` — client lệch phiên bản/schema sẽ tự generate lại; nếu guard in lỗi đỏ tiếng Việt thì làm theo hướng dẫn đó, đừng cố chạy app (sẽ lỗi P6001 khó hiểu trên mọi API).

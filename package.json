@@ -6,9 +6,9 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "concurrently -n WEB,REALTIME -c cyan,magenta \"npm run dev:web\" \"npm run dev:realtime\"",
-    "dev:web": "npm --workspace apps/web run dev",
-    "dev:realtime": "npm --workspace apps/realtime run dev",
+    "dev": "node scripts/prisma-client-guard.mjs && concurrently -n WEB,REALTIME -c cyan,magenta \"npm run dev:web\" \"npm run dev:realtime\"",
+    "dev:web": "node scripts/prisma-client-guard.mjs && npm --workspace apps/web run dev",
+    "dev:realtime": "node scripts/prisma-client-guard.mjs && npm --workspace apps/realtime run dev",
     "build": "npm --workspace apps/web run build && npm --workspace apps/realtime run build",
     "start": "node scripts/start-all.mjs",
     "start:web": "node scripts/start-web.mjs",
