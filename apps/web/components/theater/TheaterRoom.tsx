@@ -37,7 +37,7 @@ import {
   VolumeX
 } from "lucide-react";
 import { CinemaVideoPlayer, CinemaVideoPlayerRef } from "@/components/video/CinemaVideoPlayer";
-import { TheaterScene, SeatOccupant } from "@/components/theater/TheaterScene";
+import { TheaterScene, SeatOccupant, CameraViewMode, ActiveEmote, EmoteKind, StagePerformerInfo } from "@/components/theater/TheaterScene";
 import { parseVideoUrl } from "@/lib/video-parser";
 import { FeaturePanels } from "@/components/features/FeaturePanels";
 
@@ -112,7 +112,7 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
 
   // UI States
   const [mySeat, setMySeat] = useState<string | undefined>();
-  const [viewMode, setViewMode] = useState<"wide" | "audience">("wide");
+  const [viewMode, setViewMode] = useState<CameraViewMode>("wide");
   const [showChatPanel, setShowChatPanel] = useState(false);
   const [showRoomInfo, setShowRoomInfo] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -135,6 +135,14 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
   const [actingHost, setActingHost] = useState<{ userId: string; name: string } | null>(null);
   const [disco, setDisco] = useState(false);
   const [slowModeSec, setSlowModeSec] = useState(0);
+  const [activeEmotes, setActiveEmotes] = useState<Record<string, ActiveEmote>>({});
+  const [stageList, setStageList] = useState<Array<{ userId: string; displayName: string; startedAt: number }>>([]);
+  const [fireworksBursts, setFireworksBursts] = useState<Array<{ id: number; at: number }>>([]);
+  const [quiz, setQuiz] = useState<{ question: string; options: string[]; endsAt: number } | null>(null);
+  const [quizResult, setQuizResult] = useState<{ question: string; options: string[]; correctIndex: number; counts: number[]; winners: string[]; totalAnswers: number } | null>(null);
+  const [quizAnswer, setQuizAnswer] = useState<number | null>(null);
+  const [quizAnsweredCount, setQuizAnsweredCount] = useState(0);
+  const [nowTick, setNowTick] = useState(Date.now());
   const [kickedNotice, setKickedNotice] = useState<string | null>(null);
   const [donations, setDonations] = useState<Array<{ amount: number; message?: string; userId: string; displayName: string; createdAt: string }>>([]);
   const [donationInput, setDonationInput] = useState("");
@@ -428,6 +436,48 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
       setSlowModeSec(Math.max(0, Math.floor(data.seconds || 0)));
     });
 
+    socket.on("room:emote:played", (data: { userId: string; emote: EmoteKind }) => {
+      const startedAt = Date.now();
+      setActiveEmotes((prev) => ({ ...prev, [data.userId]: { kind: data.emote, startedAt } }));
+      setTimeout(() => {
+        setActiveEmotes((prev) => {
+          if (prev[data.userId]?.startedAt !== startedAt) return prev;
+          const next = { ...prev };
+          delete next[data.userId];
+          return next;
+        });
+      }, 3600);
+    });
+
+    socket.on("stage:update", (data: { performers: Array<{ userId: string; displayName: string; startedAt: number }> }) => {
+      setStageList(data.performers || []);
+    });
+
+    socket.on("stage:fireworks", () => {
+      const burst = { id: Date.now() + Math.random(), at: Date.now() };
+      setFireworksBursts((prev) => [...prev.slice(-2), burst]);
+      setTimeout(() => {
+        setFireworksBursts((prev) => prev.filter((b) => b.id !== burst.id));
+      }, 2400);
+    });
+
+    socket.on("quiz:question", (data: { question: string; options: string[]; endsAt: number; answeredCount: number }) => {
+      setQuiz({ question: data.question, options: data.options, endsAt: data.endsAt });
+      setQuizResult(null);
+      setQuizAnswer(null);
+      setQuizAnsweredCount(data.answeredCount || 0);
+    });
+
+    socket.on("quiz:answered-count", (data: { count: number }) => {
+      setQuizAnsweredCount(data.count);
+    });
+
+    socket.on("quiz:result", (data: { question: string; options: string[]; correctIndex: number; counts: number[]; winners: string[]; totalAnswers: number }) => {
+      setQuizResult(data);
+      setQuiz(null);
+      setTimeout(() => setQuizResult(null), 10000);
+    });
+
     socket.on("room:kicked", (data: { message?: string }) => {
       setKickedNotice(data?.message || "Bạn đã bị mời ra khỏi phòng.");
       setTimeout(() => router.push("/"), 2800);
@@ -514,6 +564,12 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
         player.setPlaybackRate(target);
       }
     }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // 1s UI tick driving the stage + quiz countdown labels.
+  useEffect(() => {
+    const timer = setInterval(() => setNowTick(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
 
@@ -694,6 +750,88 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
             {kickedNotice}
             <div style={{ marginTop: "8px", fontSize: "11px", color: "#fca5a5" }}>Đang đưa bạn về trang chủ…</div>
           </div>
+        </div>
+      )}
+
+      {/* Stage status chip: who is performing + seconds left on their turn */}
+      {stageList.length > 0 && (
+        <div style={{ position: "fixed", left: "16px", bottom: "72px", zIndex: 400, background: "rgba(24, 12, 36, 0.92)", border: "1px solid rgba(244, 114, 182, 0.4)", borderRadius: "12px", padding: "8px 12px", color: "#fbcfe8", fontSize: "11px", lineHeight: 1.7, backdropFilter: "blur(6px)" }}>
+          <b style={{ color: "#f9a8d4" }}>🎤 Sân khấu</b>
+          {stageList.map((p) => (
+            <div key={p.userId}>
+              {p.displayName} — còn {Math.max(0, 30 - Math.floor((nowTick - p.startedAt) / 1000))}s
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Mid-movie quiz card */}
+      {(quiz || quizResult) && (
+        <div style={{ position: "fixed", top: "76px", left: "50%", transform: "translateX(-50%)", zIndex: 450, width: "min(480px, calc(100vw - 32px))", background: "rgba(20, 10, 34, 0.96)", border: "1px solid rgba(251, 191, 36, 0.5)", borderRadius: "16px", padding: "16px 18px", color: "#fff", boxShadow: "0 18px 44px rgba(0,0,0,0.5)" }}>
+          {quiz && (
+            <>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                <b style={{ color: "#fde68a", fontSize: "12px" }}>❓ QUIZ GIỮA PHIM</b>
+                <span style={{ fontSize: "11px", color: "#fca5a5", fontWeight: 700 }}>
+                  {Math.max(0, Math.ceil((quiz.endsAt - nowTick) / 1000))}s · {quizAnsweredCount} đã trả lời
+                </span>
+              </div>
+              <div style={{ fontSize: "14.5px", fontWeight: 700, lineHeight: 1.45, marginBottom: "12px" }}>{quiz.question}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                {quiz.options.map((opt, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    disabled={quizAnswer !== null}
+                    onClick={() => {
+                      setQuizAnswer(i);
+                      socketRef.current?.emit("quiz:answer", { index: i });
+                    }}
+                    style={{
+                      background: quizAnswer === i ? "#7c3aed" : "#211631",
+                      color: "#fff",
+                      border: quizAnswer === i ? "1px solid #c4b5fd" : "1px solid rgba(139, 92, 246, 0.35)",
+                      borderRadius: "10px",
+                      padding: "9px 10px",
+                      fontSize: "12.5px",
+                      cursor: quizAnswer === null ? "pointer" : "default",
+                      textAlign: "left",
+                    }}
+                  >
+                    <b style={{ color: "#c4b5fd" }}>{["A", "B", "C", "D"][i]}.</b> {opt}
+                  </button>
+                ))}
+              </div>
+              {quizAnswer !== null && <div style={{ marginTop: "9px", fontSize: "11px", color: "#a78bfa" }}>Đã ghi nhận đáp án của bạn — chờ kết quả…</div>}
+            </>
+          )}
+          {quizResult && (
+            <>
+              <b style={{ color: "#fde68a", fontSize: "12px" }}>🏁 KẾT QUẢ QUIZ</b>
+              <div style={{ fontSize: "13.5px", fontWeight: 700, lineHeight: 1.45, margin: "8px 0 10px" }}>{quizResult.question}</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                {["A", "B", "C", "D"].map((letter, i) => (
+                  <div
+                    key={letter}
+                    style={{
+                      fontSize: "12px",
+                      padding: "6px 10px",
+                      borderRadius: "8px",
+                      background: i === quizResult.correctIndex ? "rgba(22, 101, 52, 0.55)" : quizAnswer === i ? "rgba(127, 29, 29, 0.55)" : "rgba(22, 16, 38, 0.6)",
+                      border: i === quizResult.correctIndex ? "1px solid #4ade80" : "1px solid rgba(139, 92, 246, 0.25)",
+                    }}
+                  >
+                    <b>{letter}.</b> {quizResult.options[i] ?? ""}{i === quizResult.correctIndex ? " ✓" : ""} — {quizResult.counts[i] || 0} người chọn
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: "10px", fontSize: "12px", color: "#fde68a" }}>
+                {quizResult.winners.length > 0
+                  ? `🎉 Trả lời đúng: ${quizResult.winners.join(", ")}`
+                  : "Không ai trả lời đúng lần này."}
+              </div>
+            </>
+          )}
         </div>
       )}
       {/* Floating Reactions Overlay */}
@@ -981,6 +1119,18 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                 quality={effectiveSceneQuality}
                 theme={roomTheme}
                 disco={disco}
+                activeEmotes={activeEmotes}
+                stagePerformers={stageList.map((p): StagePerformerInfo => {
+                  const member = membersList.find((m) => m.userId === p.userId);
+                  return {
+                    userId: p.userId,
+                    displayName: p.displayName,
+                    gender: member?.gender,
+                    appearance: member?.appearance,
+                    startedAt: p.startedAt,
+                  };
+                })}
+                fireworksBursts={fireworksBursts}
                 recentReactions={sceneReactions}
                 onSelectSeat={handleSelectSeat}
               />
@@ -1039,9 +1189,19 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                   />
                   <span>{audioMuted ? 0 : audioVolume}%</span>
                 </div>
-                <button type="button" onClick={() => setViewMode(viewMode === "wide" ? "audience" : "wide")} style={{ background: "#211631", color: "#fff", border: "1px solid #68409a", borderRadius: 12, padding: "6px 10px", fontSize: 11, cursor: "pointer" }}>
-                  {viewMode === "wide" ? "Góc khán giả" : "Góc rộng"}
-                </button>
+                <select
+                  aria-label="Góc camera"
+                  title="Góc camera"
+                  value={viewMode}
+                  onChange={(e) => setViewMode(e.target.value as CameraViewMode)}
+                  style={{ background: "#211631", color: "#fff", border: "1px solid #68409a", borderRadius: 12, padding: "6px 8px", fontSize: 11, cursor: "pointer" }}
+                >
+                  <option value="wide">Góc rộng</option>
+                  <option value="panorama">Toàn rạp</option>
+                  <option value="audience">Ghế của tôi</option>
+                  <option value="reverse">Nhìn lại khán giả</option>
+                  <option value="focus">Tập trung màn hình</option>
+                </select>
                 <button type="button" onClick={() => socketRef.current?.emit("room:disco", { disco: !disco })} title="Chế độ disco cho cả phòng (chủ phòng/mod bật tắt)" style={{ background: disco ? "#831843" : "#211631", color: "#fff", border: "1px solid #68409a", borderRadius: 12, padding: "6px 10px", fontSize: 11, cursor: "pointer" }}>
                   🪩 {disco ? "Tắt Disco" : "Disco"}
                 </button>
@@ -1068,6 +1228,41 @@ export default function TheaterRoom({ roomCode }: { roomCode: string }) {
                   ))}
                 </div>
 
+                {/* Character emotes: your avatar performs for the whole room */}
+                <div style={{ display: "flex", alignItems: "center", gap: "4px", padding: "0 4px" }}>
+                  {([
+                    { kind: "jump", label: "🙆 Nhảy" },
+                    { kind: "dance", label: "🕺 Múa" },
+                    { kind: "wave", label: "👋 Vẫy" },
+                    { kind: "clap", label: "👏 Vỗ tay" },
+                  ] as Array<{ kind: EmoteKind; label: string }>).map((e) => (
+                    <button
+                      key={e.kind}
+                      type="button"
+                      onClick={() => socketRef.current?.emit("room:emote", { emote: e.kind })}
+                      style={{ background: "transparent", border: "1px solid rgba(139, 92, 246, 0.3)", color: "#e9d5ff", fontSize: "10.5px", cursor: "pointer", padding: "4px 8px", borderRadius: "999px", whiteSpace: "nowrap" }}
+                    >
+                      {e.label}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => socketRef.current?.emit(stageList.some((p) => p.userId === currentUser?.id) ? "stage:leave" : "stage:join")}
+                  title="Lên sân khấu trình diễn 30 giây trước cả phòng (tối đa 5 người)"
+                  style={{ display: "inline-flex", alignItems: "center", gap: "5px", background: stageList.some((p) => p.userId === currentUser?.id) ? "#831843" : "transparent", color: "#f9a8d4", border: "1px solid rgba(244, 114, 182, 0.35)", borderRadius: "999px", padding: "6px 10px", fontSize: "11px", cursor: "pointer", whiteSpace: "nowrap" }}
+                >
+                  🎤 {stageList.some((p) => p.userId === currentUser?.id) ? "Rời sân khấu" : "Lên sân khấu"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => socketRef.current?.emit("quiz:start")}
+                  title="Mở một câu quiz giữa phim cho cả phòng (chủ phòng/mod)"
+                  style={{ display: "inline-flex", alignItems: "center", gap: "5px", background: "transparent", color: "#fde68a", border: "1px solid rgba(251, 191, 36, 0.35)", borderRadius: "999px", padding: "6px 10px", fontSize: "11px", cursor: "pointer", whiteSpace: "nowrap" }}
+                >
+                  ❓ Quiz
+                </button>
                 <button
                   type="button"
                   onClick={() => socketRef.current?.emit("vote:skip")}

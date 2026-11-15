@@ -5,6 +5,21 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { RoundedBox, Stars, Text } from "@react-three/drei";
 import * as THREE from "three";
 
+export interface StagePerformerInfo {
+  userId: string;
+  displayName: string;
+  gender?: string;
+  appearance?: { shirtColor?: string; hairStyle?: string; accessory?: string };
+  startedAt: number;
+}
+
+export type EmoteKind = "jump" | "dance" | "wave" | "clap";
+
+export interface ActiveEmote {
+  kind: EmoteKind;
+  startedAt: number;
+}
+
 export interface SeatOccupant {
   userId: string;
   displayName: string;
@@ -13,8 +28,10 @@ export interface SeatOccupant {
   appearance?: { shirtColor?: string; hairStyle?: string; accessory?: string };
 }
 
+export type CameraViewMode = "wide" | "audience" | "panorama" | "reverse" | "focus";
+
 export interface TheaterSceneProps {
-  viewMode?: "wide" | "audience";
+  viewMode?: CameraViewMode;
   selectedSeat?: string;
   occupiedSeats: Record<string, SeatOccupant>;
   isPlaying: boolean;
@@ -24,6 +41,9 @@ export interface TheaterSceneProps {
   quality?: "low" | "medium" | "high";
   overlayElement?: HTMLDivElement | null;
   disco?: boolean;
+  activeEmotes?: Record<string, ActiveEmote>;
+  stagePerformers?: StagePerformerInfo[];
+  fireworksBursts?: Array<{ id: number; at: number }>;
 }
 
 // Wardrobe shirt colors are stored by Vietnamese name; the 3D viewer needs hex.
@@ -267,6 +287,7 @@ function VoxelViewer({
   isReacting = false,
   seed = 0,
   isFirstPerson = false,
+  emote,
 }: {
   shirtColor: string;
   hairColor?: string;
@@ -277,6 +298,7 @@ function VoxelViewer({
   isReacting?: boolean;
   seed?: number;
   isFirstPerson?: boolean;
+  emote?: ActiveEmote;
 }) {
   const groupRef = useRef<THREE.Group>(null);
   const headRef = useRef<THREE.Group>(null);
@@ -286,12 +308,49 @@ function VoxelViewer({
   useFrame((state) => {
     if (isFirstPerson) return;
     const t = state.clock.elapsedTime + seed;
-    // Breathing & subtle body bobbing
+    // Emote performance (room:emote): while one is active it overrides the
+    // idle/reaction pose. Durations: jump 1.2s, clap 2s, wave 2.4s, dance 3s.
+    const emoteElapsed = emote ? (Date.now() - emote.startedAt) / 1000 : Infinity;
+    const emoteDuration = emote?.kind === "dance" ? 3 : emote?.kind === "wave" ? 2.4 : emote?.kind === "clap" ? 2 : 1.2;
+    const emoteActive = Boolean(emote) && emoteElapsed >= 0 && emoteElapsed < emoteDuration;
+    // Breathing & subtle body bobbing (+ the jump arc while jumping)
     if (groupRef.current) {
-      groupRef.current.position.y = 0.45 + Math.sin(t * 1.8) * 0.007;
+      const jumpOffset = emoteActive && emote?.kind === "jump"
+        ? Math.abs(Math.sin((emoteElapsed / emoteDuration) * Math.PI * 2)) * 0.22
+        : 0;
+      groupRef.current.position.y = 0.45 + Math.sin(t * 1.8) * 0.007 + jumpOffset;
+      groupRef.current.rotation.z = emoteActive && emote?.kind === "dance" ? Math.sin(t * 6) * 0.09 : 0;
+    }
+    if (emoteActive && headRef.current && leftArmRef.current && rightArmRef.current) {
+      if (emote?.kind === "dance") {
+        leftArmRef.current.rotation.x = -0.7 + Math.sin(t * 7) * 0.55;
+        rightArmRef.current.rotation.x = -0.7 + Math.cos(t * 7) * 0.55;
+        leftArmRef.current.rotation.z = 0;
+        rightArmRef.current.rotation.z = 0;
+        headRef.current.rotation.z = Math.sin(t * 7) * 0.12;
+        headRef.current.rotation.x = Math.abs(Math.sin(t * 7)) * 0.12;
+      } else if (emote?.kind === "wave") {
+        rightArmRef.current.rotation.x = -2.7;
+        rightArmRef.current.rotation.z = Math.sin(t * 11) * 0.45;
+        leftArmRef.current.rotation.x = Math.sin(t * 1.4) * 0.03;
+        leftArmRef.current.rotation.z = 0;
+      } else if (emote?.kind === "clap") {
+        leftArmRef.current.rotation.x = -1.25;
+        rightArmRef.current.rotation.x = -1.25;
+        leftArmRef.current.rotation.z = 0.28 + Math.sin(t * 12) * 0.16;
+        rightArmRef.current.rotation.z = -0.28 - Math.sin(t * 12) * 0.16;
+      } else {
+        // jump: both arms up
+        leftArmRef.current.rotation.x = -2.9;
+        rightArmRef.current.rotation.x = -2.9;
+        leftArmRef.current.rotation.z = 0;
+        rightArmRef.current.rotation.z = 0;
+      }
+      return;
     }
     // Head animation: reacts or gently nods with movie rhythm
     if (headRef.current) {
+      if (!isReacting) headRef.current.rotation.z = 0;
       if (isReacting) {
         headRef.current.rotation.x = Math.sin(t * 8) * 0.14;
         headRef.current.rotation.z = Math.cos(t * 6) * 0.09;
@@ -311,6 +370,8 @@ function VoxelViewer({
       } else {
         leftArmRef.current.rotation.x = Math.sin(t * 1.4) * 0.03;
         rightArmRef.current.rotation.x = Math.sin(t * 1.4) * 0.03;
+        leftArmRef.current.rotation.z = 0;
+        rightArmRef.current.rotation.z = 0;
       }
     }
   });
@@ -564,6 +625,153 @@ function StagePerformers() {
 }
 
 
+// Live stage: real room members performing on the five stage spots while
+// their 30-second turn runs (server-driven via stage:update). Replaces the
+// ambient trio whenever at least one performer is up.
+const STAGE_SPOT_X = [-2.6, -1.3, 0, 1.3, 2.6];
+const STAGE_RING_COLORS = ["#a3e635", "#f472b6", "#22d3ee", "#fbbf24", "#c084fc"];
+const STAGE_POSES: Array<[number, number]> = [[2.6, -2.6], [2.8, -0.5], [1.9, -2.9], [2.4, -2.2], [2.9, -1.2]];
+
+function LiveStagePerformers({ performers }: { performers: StagePerformerInfo[] }) {
+  const figureRefs = useRef<Array<THREE.Group | null>>([]);
+
+  useFrame((state) => {
+    const t = state.clock.elapsedTime;
+    figureRefs.current.forEach((g, i) => {
+      if (!g) return;
+      g.position.y = Math.abs(Math.sin(t * 3 + i * 1.3)) * 0.07;
+      g.rotation.z = Math.sin(t * 3 + i * 1.3) * 0.06;
+    });
+  });
+
+  return (
+    <group position={[0, 0.4, -2.3]}>
+      <mesh position={[0, -0.175, 0]}>
+        <boxGeometry args={[7.4, 0.35, 1.15]} />
+        <meshStandardMaterial color="#17102a" roughness={0.85} />
+      </mesh>
+      <mesh position={[0, -0.02, 0.58]}>
+        <boxGeometry args={[7.4, 0.045, 0.05]} />
+        <meshBasicMaterial color="#7c3aed" />
+      </mesh>
+      {performers.slice(0, 5).map((p, i) => (
+        <group key={p.userId} position={[STAGE_SPOT_X[i], 0, 0]}>
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]}>
+            <ringGeometry args={[0.55, 0.75, 32]} />
+            <meshBasicMaterial color={STAGE_RING_COLORS[i]} side={THREE.DoubleSide} />
+          </mesh>
+          <group
+            ref={(g) => {
+              figureRefs.current[i] = g;
+            }}
+            scale={0.92}
+          >
+            <StandingViewer shirt={shirtHex(p.appearance?.shirtColor, STAGE_RING_COLORS[i])} pose={STAGE_POSES[i]} />
+          </group>
+          <Suspense fallback={null}>
+            <Text
+              position={[0, 1.66, 0.1]}
+              fontSize={p.displayName.length > 8 ? 0.075 : 0.095}
+              color="#fde68a"
+              anchorX="center"
+              anchorY="middle"
+            >
+              {p.displayName}
+            </Text>
+          </Suspense>
+        </group>
+      ))}
+    </group>
+  );
+}
+
+// One fireworks burst: ~90 particles launched from above the stage,
+// integrated analytically each frame (position = v*t - g*t²/2), fading
+// out over 2 seconds. Geometry is built imperatively to stay independent
+// of the R3F version's attribute JSX API.
+function FireworksBurst({ burstId, at }: { burstId: number; at: number }) {
+  const pointsRef = useRef<THREE.Points>(null);
+  const data = useMemo(() => {
+    const count = 90;
+    const velocities = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3);
+    const palette = ["#f472b6", "#22d3ee", "#a3e635", "#fbbf24", "#c084fc", "#ffffff"].map((c) => new THREE.Color(c));
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+    for (let i = 0; i < count; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      const speed = 1.7 + Math.random() * 1.6;
+      velocities[i * 3] = Math.sin(phi) * Math.cos(theta) * speed;
+      velocities[i * 3 + 1] = Math.cos(phi) * speed * 0.9 + 0.7;
+      velocities[i * 3 + 2] = Math.sin(phi) * Math.sin(theta) * speed;
+      const color = palette[i % palette.length];
+      colors[i * 3] = color.r;
+      colors[i * 3 + 1] = color.g;
+      colors[i * 3 + 2] = color.b;
+    }
+    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    return { geo, velocities, count };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [burstId]);
+
+  useFrame(() => {
+    const points = pointsRef.current;
+    if (!points) return;
+    const t = (Date.now() - at) / 1000;
+    if (t < 0 || t > 2) {
+      points.visible = false;
+      return;
+    }
+    points.visible = true;
+    const pos = points.geometry.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < data.count; i++) {
+      pos.setXYZ(
+        i,
+        data.velocities[i * 3] * t,
+        data.velocities[i * 3 + 1] * t - 1.35 * t * t,
+        data.velocities[i * 3 + 2] * t
+      );
+    }
+    pos.needsUpdate = true;
+    (points.material as THREE.PointsMaterial).opacity = Math.max(0, 1 - t / 2);
+  });
+
+  return (
+    <points ref={pointsRef} position={[0, 5.6, -3.1]} geometry={data.geo}>
+      <pointsMaterial size={0.085} vertexColors transparent depthWrite={false} />
+    </points>
+  );
+}
+
+// Small low-poly heart floating between two adjacent occupied seats —
+// the "couple seat" marker. Built from geometry (no emoji glyph needed).
+function CoupleHeart() {
+  const ref = useRef<THREE.Group>(null);
+  useFrame(({ clock }) => {
+    if (!ref.current) return;
+    const t = clock.elapsedTime;
+    ref.current.position.y = Math.sin(t * 2) * 0.03;
+    ref.current.rotation.y = Math.sin(t * 1.3) * 0.3;
+  });
+  return (
+    <group ref={ref}>
+      <mesh position={[-0.05, 0.03, 0]}>
+        <sphereGeometry args={[0.055, 10, 8]} />
+        <meshBasicMaterial color="#f472b6" />
+      </mesh>
+      <mesh position={[0.05, 0.03, 0]}>
+        <sphereGeometry args={[0.055, 10, 8]} />
+        <meshBasicMaterial color="#f472b6" />
+      </mesh>
+      <mesh position={[0, -0.05, 0]} rotation={[0, 0, Math.PI]}>
+        <coneGeometry args={[0.078, 0.13, 4]} />
+        <meshBasicMaterial color="#f472b6" />
+      </mesh>
+    </group>
+  );
+}
+
 interface CinemaSeatProps {
   x: number;
   y: number;
@@ -577,6 +785,8 @@ interface CinemaSeatProps {
   isReacting?: boolean;
   seed?: number;
   isFirstPerson?: boolean;
+  emote?: ActiveEmote;
+  coupleHeart?: boolean;
 }
 
 function CinemaSeat({
@@ -592,6 +802,8 @@ function CinemaSeat({
   isReacting = false,
   seed = 0,
   isFirstPerson = false,
+  emote,
+  coupleHeart = false,
 }: CinemaSeatProps) {
   const [hovered, setHovered] = useState(false);
 
@@ -667,6 +879,13 @@ function CinemaSeat({
         </Text>
       </Suspense>
 
+      {/* Couple marker: this seat and its right neighbour are both taken */}
+      {coupleHeart && (
+        <group position={[0.42, 1.3, 0.12]}>
+          <CoupleHeart />
+        </group>
+      )}
+
       {/* Actual Occupant OR Ambient Voxel Viewer */}
       {occupant ? (
         <>
@@ -680,6 +899,7 @@ function CinemaSeat({
             isReacting={isReacting}
             seed={seed}
             isFirstPerson={isFirstPerson}
+            emote={emote}
           />
           {!isFirstPerson && (
             <group position={[0, 0.8, 0.175]}>
@@ -732,7 +952,7 @@ function FloatingEmojiParticle({ emoji, x, z, startTime }: { emoji: string; x: n
 
 // Camera rig supporting wide hall overview and authentic first-person audience view
 // directly from the character's head looking at the center of the cinema screen.
-function CameraRig({ viewMode, selectedSeat, overlayElement }: { viewMode: "wide" | "audience"; selectedSeat?: string; overlayElement?: HTMLDivElement | null }) {
+function CameraRig({ viewMode, selectedSeat, overlayElement }: { viewMode: CameraViewMode; selectedSeat?: string; overlayElement?: HTMLDivElement | null }) {
   const { camera, gl } = useThree();
   const targetPosition = useRef(new THREE.Vector3());
   const basePosition = useRef(new THREE.Vector3(0, 6.8, 15.5));
@@ -757,6 +977,26 @@ function CameraRig({ viewMode, selectedSeat, overlayElement }: { viewMode: "wide
       // First-person perspective directly from the head/eyes of the character in the seat
       // looking straight ahead at the center of the cinema screen (y=3.8, z=-5.22)
       targetPosition.current.set(seatPose.x, seatPose.y + 1.25, seatPose.z - 0.12);
+      targetLookAt.current.set(0, 3.8, -5.22);
+      zoomTarget.current = 1.0;
+      zoomCurrent.current = 1.0;
+    } else if (viewMode === "panorama") {
+      // High, pulled-back vantage: the whole hall — screen, stage and all
+      // seat rows — in a single frame.
+      targetPosition.current.set(0, 7.9, 16.9);
+      targetLookAt.current.set(0, 1.8, -5.22);
+      zoomTarget.current = 1.0;
+      zoomCurrent.current = 1.0;
+    } else if (viewMode === "reverse") {
+      // From just in front of the screen, looking back at the audience
+      // (the video overlay hides itself: the screen is behind the camera).
+      targetPosition.current.set(0, 3.4, -4.2);
+      targetLookAt.current.set(0, 1.0, 3.0);
+      zoomTarget.current = 1.0;
+      zoomCurrent.current = 1.0;
+    } else if (viewMode === "focus") {
+      // Straight at the screen from mid-hall: the picture fills the frame.
+      targetPosition.current.set(0, 3.9, 4.6);
       targetLookAt.current.set(0, 3.8, -5.22);
       zoomTarget.current = 1.0;
       zoomCurrent.current = 1.0;
@@ -1059,7 +1299,10 @@ export function TheaterScene({
   onSelectSeat,
   quality = "high",
   overlayElement,
-  disco = false
+  disco = false,
+  activeEmotes,
+  stagePerformers,
+  fireworksBursts
 }: TheaterSceneProps) {
   const isSky = theme === "sky";
   const isCyberpunk = theme === "cyberpunk";
@@ -1112,12 +1355,19 @@ export function TheaterScene({
             isReacting={isReacting}
             seed={seed}
             isFirstPerson={isFirstPerson}
+            emote={occupant ? activeEmotes?.[occupant.userId] : undefined}
+            coupleHeart={Boolean(
+              occupant &&
+              col + 1 < seatsPerRow &&
+              (col + 1) % (seatsPerRow / 2) !== 0 &&
+              occupiedSeats[`${rowLabels[row]}${col + 2}`]
+            )}
           />
         );
       }
     }
     return list;
-  }, [selectedSeat, occupiedSeats, onSelectSeat, isPlaying, recentReactions, viewMode]);
+  }, [selectedSeat, occupiedSeats, onSelectSeat, isPlaying, recentReactions, viewMode, activeEmotes]);
 
   return (
     <Canvas
@@ -1152,8 +1402,17 @@ export function TheaterScene({
         <meshBasicMaterial color={stageNeon2} />
       </mesh>
 
-      {/* Three viewers dancing on stage spots, choigivui-style */}
-      <StagePerformers />
+      {/* Live performers replace the ambient trio while anyone is on stage */}
+      {stagePerformers && stagePerformers.length > 0 ? (
+        <LiveStagePerformers performers={stagePerformers} />
+      ) : (
+        <StagePerformers />
+      )}
+
+      {/* Fireworks bursts celebrating finished performances */}
+      {(fireworksBursts || []).map((b) => (
+        <FireworksBurst key={b.id} burstId={b.id} at={b.at} />
+      ))}
 
       {/* Stepped auditorium tiers and illuminated center aisle */}
       {rowLabels.map((_, row) => {

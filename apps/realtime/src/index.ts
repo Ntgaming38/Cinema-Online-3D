@@ -104,6 +104,7 @@ function checkRateLimit(store: Map<string, number[]>, key: string, limit: number
 
 const chatRateLimits = new Map<string, number[]>();
 const reactionRateLimits = new Map<string, number[]>();
+const emoteRateLimits = new Map<string, number[]>();
 
 // ==================== MISSION / EXP / LEADERBOARD ====================
 const MISSION_DEFS: Record<string, { label: string; exp: number; target: number }> = {
@@ -167,6 +168,20 @@ const roomActingHost = new Map<string, string>(); // code -> userId temporarily 
 const roomMutedUntil = new Map<string, Map<string, number>>(); // code -> userId -> mute expiry (epoch ms)
 const roomBannedUsers = new Map<string, Set<string>>(); // code -> userIds kicked this session (cleared when the room empties)
 const roomSlowModeSec = new Map<string, number>(); // code -> seconds a regular member must wait between messages (0 = off)
+const roomStage = new Map<string, Array<{ userId: string; displayName: string; startedAt: number }>>(); // code -> live stage performers (max 5, 30s each)
+const roomQuiz = new Map<string, { question: string; options: string[]; answerIndex: number; endsAt: number; answers: Map<string, { index: number; displayName: string }> }>();
+
+const STAGE_MAX = 5;
+const STAGE_DURATION_MS = 30_000;
+const QUIZ_DURATION_MS = 20_000;
+const QUIZ_BANK: Array<{ question: string; options: string[]; answerIndex: number }> = [
+  { question: "Bộ phim nào giữ kỷ lục doanh thu cao nhất mọi thời đại (chưa tính lạm phát)?", options: ["Avengers: Endgame", "Avatar", "Titanic", "Avatar: The Way of Water"], answerIndex: 1 },
+  { question: "Đạo diễn Christopher Nolan KHÔNG làm bộ phim nào sau đây?", options: ["Inception", "Interstellar", "Avatar", "Tenet"], answerIndex: 2 },
+  { question: "Giải thưởng điện ảnh danh giá nhất của Mỹ tên là gì?", options: ["Quả Cầu Vàng", "Cành Cọ Vàng", "Oscar", "BAFTA"], answerIndex: 2 },
+  { question: "Trong phim hoạt hình, hãng nào sản xuất 'Vua Sư Tử' (The Lion King, 1994)?", options: ["Pixar", "DreamWorks", "Studio Ghibli", "Disney"], answerIndex: 3 },
+  { question: "Nhân vật Iron Man trong Vũ trụ Marvel do diễn viên nào thủ vai?", options: ["Chris Evans", "Robert Downey Jr.", "Chris Hemsworth", "Mark Ruffalo"], answerIndex: 1 },
+  { question: "'Parasite' (Ký Sinh Trùng) — phim đoạt Oscar Phim hay nhất 2020 — đến từ quốc gia nào?", options: ["Nhật Bản", "Trung Quốc", "Hàn Quốc", "Việt Nam"], answerIndex: 2 },
+];
 const roomLastChatAt = new Map<string, Map<string, number>>(); // code -> userId -> last accepted chat time (slow mode)
 
 function getQueueItemVotes(code: string, itemId: string): number {
@@ -349,6 +364,20 @@ function isStaff(code: string, userId: string) {
   if (roomOwners.get(code) === userId) return true;
   if (isActingHost(code, userId)) return true;
   return roomUsers.get(code)?.get(userId)?.role === "MODERATOR";
+}
+
+function broadcastStage(code: string) {
+  io.to(code).emit("stage:update", { performers: roomStage.get(code) || [] });
+}
+
+// Removes a user from the stage list; returns true when the list changed.
+function removeFromStage(code: string, userId: string) {
+  const list = roomStage.get(code);
+  if (!list) return false;
+  const next = list.filter((p) => p.userId !== userId);
+  if (next.length === list.length) return false;
+  if (next.length === 0) roomStage.delete(code); else roomStage.set(code, next);
+  return true;
 }
 
 function muteRemainingMs(code: string, userId: string) {
@@ -673,6 +702,16 @@ io.on("connection", (socket: Socket) => {
       }
       const slowSec = roomSlowModeSec.get(code) || 0;
       if (slowSec > 0) socket.emit("room:slowmode:changed", { seconds: slowSec });
+      socket.emit("stage:update", { performers: roomStage.get(code) || [] });
+      const activeQuiz = roomQuiz.get(code);
+      if (activeQuiz) {
+        socket.emit("quiz:question", {
+          question: activeQuiz.question,
+          options: activeQuiz.options,
+          endsAt: activeQuiz.endsAt,
+          answeredCount: activeQuiz.answers.size,
+        });
+      }
 
       // Announce arrival if first tab for this user
       if (userRecord.sockets.size === 1) {
@@ -763,6 +802,16 @@ io.on("connection", (socket: Socket) => {
     } catch (e) {
       console.error("Save chat error:", e);
     }
+  });
+
+  // Character emotes: the sender's avatar performs for the whole room.
+  socket.on("room:emote", async (payload: { emote?: string }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    if (!code) return;
+    const kind = payload?.emote;
+    if (kind !== "jump" && kind !== "dance" && kind !== "wave" && kind !== "clap") return;
+    if (!checkRateLimit(emoteRateLimits, user.userId, 1, 2500)) return;
+    io.to(code).emit("room:emote:played", { userId: user.userId, emote: kind });
   });
 
   socket.on("playback:command", async (payload: {
@@ -1381,6 +1430,91 @@ io.on("connection", (socket: Socket) => {
     socket.emit("app:notice", { message: sec > 0 ? `Đã bật chat chậm: ${sec} giây giữa hai tin nhắn.` : "Đã tắt chat chậm." });
   });
 
+  // ==================== STAGE PERFORMANCES + QUIZ ====================
+  socket.on("stage:join", async () => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    if (!code) return;
+    const rec = roomUsers.get(code)?.get(user.userId);
+    if (!rec) return;
+    const list = roomStage.get(code) || [];
+    if (list.some((p) => p.userId === user.userId)) {
+      return socket.emit("app:error", { message: "Bạn đang ở trên sân khấu rồi." });
+    }
+    if (list.length >= STAGE_MAX) {
+      return socket.emit("app:error", { message: `Sân khấu đã đủ ${STAGE_MAX} người — chờ lượt sau nhé.` });
+    }
+    list.push({ userId: user.userId, displayName: rec.displayName, startedAt: Date.now() });
+    roomStage.set(code, list);
+    broadcastStage(code);
+    io.to(code).emit("chat:message", {
+      id: "sys_" + Date.now(),
+      userId: "system",
+      user: "Hệ thống",
+      message: `🎤 ${rec.displayName} đã bước lên sân khấu trình diễn!`,
+      createdAt: new Date().toISOString(),
+    });
+  });
+
+  socket.on("stage:leave", async () => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    if (!code) return;
+    if (removeFromStage(code, user.userId)) broadcastStage(code);
+  });
+
+  socket.on("quiz:start", async () => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    if (!code) return;
+    if (!isStaff(code, user.userId)) {
+      return socket.emit("app:error", { message: "Chỉ chủ phòng/quản trị viên mới mở được quiz." });
+    }
+    if (roomQuiz.has(code)) {
+      return socket.emit("app:error", { message: "Đang có một câu quiz chưa kết thúc." });
+    }
+    const pick = QUIZ_BANK[Math.floor(Math.random() * QUIZ_BANK.length)];
+    const quiz = {
+      question: pick.question,
+      options: pick.options,
+      answerIndex: pick.answerIndex,
+      endsAt: Date.now() + QUIZ_DURATION_MS,
+      answers: new Map<string, { index: number; displayName: string }>(),
+    };
+    roomQuiz.set(code, quiz);
+    io.to(code).emit("quiz:question", {
+      question: quiz.question,
+      options: quiz.options,
+      endsAt: quiz.endsAt,
+      answeredCount: 0,
+    });
+    setTimeout(() => {
+      if (roomQuiz.get(code) !== quiz) return; // room closed or quiz replaced
+      roomQuiz.delete(code);
+      const counts = quiz.options.map((_, i) => [...quiz.answers.values()].filter((a) => a.index === i).length);
+      const winners = [...quiz.answers.values()]
+        .filter((a) => a.index === quiz.answerIndex)
+        .map((a) => a.displayName);
+      io.to(code).emit("quiz:result", {
+        question: quiz.question,
+        options: quiz.options,
+        correctIndex: quiz.answerIndex,
+        counts,
+        winners,
+        totalAnswers: quiz.answers.size,
+      });
+    }, QUIZ_DURATION_MS);
+  });
+
+  socket.on("quiz:answer", async ({ index }: { index?: number }) => {
+    const code = socketMeta.get(socket.id)?.roomCode;
+    if (!code) return;
+    const quiz = roomQuiz.get(code);
+    if (!quiz) return;
+    if (typeof index !== "number" || index < 0 || index >= quiz.options.length) return;
+    if (quiz.answers.has(user.userId)) return; // first answer wins
+    if (Date.now() > quiz.endsAt) return;
+    quiz.answers.set(user.userId, { index, displayName: user.displayName });
+    io.to(code).emit("quiz:answered-count", { count: quiz.answers.size });
+  });
+
   // ==================== CHARACTER / APPEARANCE ====================
   socket.on("character:update", ({ shirtColor, hairStyle, accessory }: { shirtColor?: string; hairStyle?: string; accessory?: string }) => {
     const code = socketMeta.get(socket.id)?.roomCode;
@@ -1542,6 +1676,7 @@ io.on("connection", (socket: Socket) => {
       rec.sockets.delete(s.id);
       if (rec.sockets.size === 0) {
         usersMap.delete(user.userId);
+        if (removeFromStage(code, user.userId)) broadcastStage(code);
 
         // Notify room that user left
         s.to(code).emit("chat:message", {
@@ -1580,6 +1715,8 @@ io.on("connection", (socket: Socket) => {
       roomBannedUsers.delete(code);
       roomSlowModeSec.delete(code);
       roomLastChatAt.delete(code);
+      roomStage.delete(code);
+      roomQuiz.delete(code);
     } else {
       updateActingHost(code);
       broadcastPresence(code);
@@ -1601,6 +1738,28 @@ setInterval(() => {
     io.to(code).emit("playback:state", { ...state, positionSec, updatedAt: Date.now() });
   }
 }, 5000);
+
+// Stage sweeper: a performance lasts 30 seconds; when it ends the
+// performer steps down, the room gets fireworks and a system chat line.
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, list] of [...roomStage]) {
+    const finished = list.filter((p) => now - p.startedAt >= STAGE_DURATION_MS);
+    if (finished.length === 0) continue;
+    for (const p of finished) {
+      removeFromStage(code, p.userId);
+      io.to(code).emit("stage:fireworks", { userId: p.userId, displayName: p.displayName });
+      io.to(code).emit("chat:message", {
+        id: "sys_" + Date.now() + "_" + p.userId.slice(0, 4),
+        userId: "system",
+        user: "Hệ thống",
+        message: `🎆 ${p.displayName} vừa hoàn thành 30 giây trình diễn trên sân khấu!`,
+        createdAt: new Date().toISOString(),
+      });
+    }
+    broadcastStage(code);
+  }
+}, 2000);
 
 // Port resolution: on Botkeep the assigned public port arrives as SERVER_PORT
 // (or PORT) and must win; locally REALTIME_PORT keeps working as before.
