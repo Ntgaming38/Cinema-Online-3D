@@ -4,13 +4,26 @@
 // apps/realtime/src/index.ts: SERVER_PORT || PORT || REALTIME_PORT || 4001 —
 // so on a dedicated Botkeep server it binds the assigned SERVER_PORT, and
 // locally REALTIME_PORT keeps working.
-// If dist/ is missing (Botkeep syncs sources, then only runs the start
-// command), the realtime TypeScript build runs first.
+// If dist/ is missing OR older than the sources (Botkeep syncs sources,
+// then only runs the start command), the realtime TypeScript build runs
+// first. The freshness check matters: dist/ is untracked, so a Sync leaves
+// a stale dist in place — on 2026-11-17 the live server silently ran the
+// previous build for hours because only "missing" triggered a rebuild.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { ROOT, ensurePrisma, purgeNpmCache } from "./ensure-prisma.mjs";
+
+function newestMtimeMs(dir) {
+  let newest = 0;
+  for (const name of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, name.name);
+    if (name.isDirectory()) newest = Math.max(newest, newestMtimeMs(p));
+    else newest = Math.max(newest, fs.statSync(p).mtimeMs);
+  }
+  return newest;
+}
 
 function main() {
   const realtimeDir = path.join(ROOT, "apps/realtime");
@@ -19,8 +32,11 @@ function main() {
   purgeNpmCache();
   ensurePrisma(ROOT);
 
-  if (!fs.existsSync(entry)) {
-    console.log("[start-realtime] dist/ not found — building realtime first…");
+  const distStale =
+    !fs.existsSync(entry) ||
+    newestMtimeMs(path.join(realtimeDir, "src")) > fs.statSync(entry).mtimeMs;
+  if (distStale) {
+    console.log("[start-realtime] dist/ missing or stale — building realtime first…");
     const build = spawnSync("npm", ["--workspace", "@cinema-online-3d/realtime", "run", "build"], {
       cwd: ROOT,
       stdio: "inherit",
